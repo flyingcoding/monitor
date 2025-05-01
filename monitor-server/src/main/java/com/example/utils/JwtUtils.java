@@ -176,7 +176,7 @@ public class JwtUtils {
      * @return 是否操作成功
      */
     private boolean isInvalidUser(int uid){
-        return Boolean.TRUE.equals(template.hasKey(Const.USER_BLACK_LIST + uid));
+        return template.hasKey(Const.USER_BLACK_LIST + uid);
     }
     /**
      * 将Token列入Redis黑名单中
@@ -199,6 +199,6 @@ public class JwtUtils {
      * @return 是否操作成功
      */
     private boolean isInvalidToken(String uuid){
-        return Boolean.TRUE.equals(template.hasKey(Const.JWT_BLACK_LIST + uuid));
+        return template.hasKey(Const.JWT_BLACK_LIST + uuid);
     }
 }

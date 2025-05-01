@@ -47,7 +47,7 @@ public class SwaggerConfiguration {
                         .version("1.0")
                         .license(new License()
                                 .name("项目开源地址")
-                                .url("https://github.com/wbq123789")
+                                .url("https://github.com/flyingcoding/monitor")
                         )
                 );
 //                .externalDocs(new ExternalDocumentation()

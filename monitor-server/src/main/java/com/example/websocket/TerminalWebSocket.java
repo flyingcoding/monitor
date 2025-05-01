@@ -1,8 +1,6 @@
 package com.example.websocket;
 
-import com.example.entity.dto.ClientDetail;
 import com.example.entity.dto.ClientSsh;
-import com.example.mapper.ClientDetailMapper;
 import com.example.mapper.ClientSshMapper;
 import com.jcraft.jsch.ChannelShell;
 import com.jcraft.jsch.JSch;

@@ -88,11 +88,11 @@
             <artifactId>java-jwt</artifactId>
             <version>4.3.0</version>
         </dependency>
-        <!--    Swagger文档生成框架    -->
+        <!--    knife4j依赖   -->
         <dependency>
-            <groupId>org.springdoc</groupId>
-            <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
-            <version>2.1.0</version>
+            <groupId>com.github.xiaoymin</groupId>
+            <artifactId>knife4j-openapi3-jakarta-spring-boot-starter</artifactId>
+            <version>4.4.0</version>
         </dependency>
         <!--    influxDB客户端框架    -->
         <dependency>
