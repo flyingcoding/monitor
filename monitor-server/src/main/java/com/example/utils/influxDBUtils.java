@@ -32,8 +32,10 @@ public class influxDBUtils {
     String user;
     @Value("${spring.influx.password}")
     String password;
-    String BUCKET = "monitor";
-    String ORG= "flying";
+    @Value("${spring.influx.bucket}")
+    String BUCKET;
+    @Value("${spring.influx.organization}")
+    String ORG;
 
     private InfluxDBClient client;
 

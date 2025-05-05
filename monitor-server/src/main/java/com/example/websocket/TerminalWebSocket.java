@@ -40,13 +40,23 @@ public class TerminalWebSocket {
     @OnOpen
     public void onOpen(Session session,
                        @PathParam(value = "clientId") String clientId) throws Exception {
-        ClientSsh ssh = sshMapper.selectById(clientId);
-        if(ssh == null) {
-            session.close(new CloseReason(CloseReason.CloseCodes.CANNOT_ACCEPT, "无法识别此主机"));
-            return;
-        }
-        if(this.createSshConnection(session, ssh, ssh.getIp())) {
-            log.info("主机 {} 的SSH连接已创建", ssh.getIp());
+        log.info("正在尝试建立WebSocket终端连接，客户端ID: {}, 会话ID: {}", clientId, session.getId());
+        try {
+            ClientSsh ssh = sshMapper.selectById(clientId);
+            if(ssh == null) {
+                log.error("找不到客户端ID为 {} 的SSH配置信息", clientId);
+                session.close(new CloseReason(CloseReason.CloseCodes.CANNOT_ACCEPT, "无法识别此主机"));
+                return;
+            }
+            log.info("已找到客户端SSH配置信息：IP={}, 端口={}, 用户名={}", ssh.getIp(), ssh.getPort(), ssh.getUsername());
+            if(this.createSshConnection(session, ssh, ssh.getIp())) {
+                log.info("主机 {} 的SSH连接已创建", ssh.getIp());
+            } else {
+                log.error("与主机 {} 的SSH连接创建失败", ssh.getIp());
+            }
+        } catch (Exception e) {
+            log.error("WebSocket连接建立过程中发生异常", e);
+            throw e;
         }
     }
 
@@ -75,20 +85,29 @@ public class TerminalWebSocket {
     }
 
     private boolean createSshConnection(Session session, ClientSsh ssh, String ip) throws IOException{
+        log.info("开始尝试SSH连接，用户: {}，IP: {}，端口: {}", ssh.getUsername(), ip, ssh.getPort());
         try {
             JSch jSch = new JSch();
+            log.info("已创建JSch实例");
             com.jcraft.jsch.Session js = jSch.getSession(ssh.getUsername(), ip, ssh.getPort());
+            log.info("已获取JSch Session，准备进行连接配置");
             js.setPassword(ssh.getPassword());
             js.setConfig("StrictHostKeyChecking", "no");
-            js.setTimeout(3000);
+            js.setTimeout(10000);
+            log.info("SSH连接参数设置完毕，尝试连接到 {}:{}", ip, ssh.getPort());
             js.connect();
+            log.info("SSH连接成功，准备打开Shell通道");
             ChannelShell channel = (ChannelShell) js.openChannel("shell");
             channel.setPtyType("xterm");
+            log.info("Shell通道已创建，准备连接");
             channel.connect(1000);
+            log.info("Shell通道连接成功");
             sessionMap.put(session, new Shell(session, js, channel));
             return true;
         } catch (JSchException e) {
             String message = e.getMessage();
+            log.error("SSH连接异常：{}", message, e);
+            log.error("连接详情 - 主机: {}, 端口: {}, 用户名: {}", ip, ssh.getPort(), ssh.getUsername());
             if(message.equals("Auth fail")) {
                 session.close(new CloseReason(CloseReason.CloseCodes.CANNOT_ACCEPT,
                         "登录SSH失败，用户名或密码错误"));
@@ -97,9 +116,60 @@ public class TerminalWebSocket {
                 session.close(new CloseReason(CloseReason.CloseCodes.CANNOT_ACCEPT,
                         "连接被拒绝，可能是没有启动SSH服务或是放开端口"));
                 log.error("连接SSH失败，连接被拒绝，可能是没有启动SSH服务或是放开端口");
+            } else if(message.contains("connect timed out")) {
+                session.close(new CloseReason(CloseReason.CloseCodes.CANNOT_ACCEPT,
+                        "连接超时，请检查网络或防火墙设置"));
+                log.error("连接SSH失败，连接超时，可能是网络问题或防火墙阻止了连接");
+            } else if(message.contains("UnknownHostException") || message.contains("No such host is known")) {
+                session.close(new CloseReason(CloseReason.CloseCodes.CANNOT_ACCEPT,
+                        "无法解析主机地址，请检查IP是否正确"));
+                log.error("连接SSH失败，无法解析主机地址 {}", ip);
             } else {
                 session.close(new CloseReason(CloseReason.CloseCodes.CANNOT_ACCEPT, message));
-                log.error("连接SSH时出现错误", e);
+                log.error("连接SSH时出现未知错误: {}", e.getMessage());
+            }
+
+            // 尝试执行网络诊断
+            try {
+                log.info("正在执行网络诊断，检查与目标主机的连接...");
+
+                // 记录服务器信息
+                String serverInfo = String.format("服务器信息 - 主机名: %s, IP: %s",
+                        java.net.InetAddress.getLocalHost().getHostName(),
+                        java.net.InetAddress.getLocalHost().getHostAddress());
+                log.info(serverInfo);
+
+                // 尝试执行ping测试
+                boolean reachable = false;
+                try {
+                    log.info("正在尝试ping目标主机 {} ...", ip);
+                    reachable = java.net.InetAddress.getByName(ip).isReachable(3000);
+                    log.info("目标主机 {} 可达性: {}", ip, reachable);
+                } catch (Exception pingEx) {
+                    log.error("无法执行ping测试: {}", pingEx.getMessage(), pingEx);
+                }
+
+                // 尝试获取目标主机信息
+                try {
+                    java.net.InetAddress addr = java.net.InetAddress.getByName(ip);
+                    log.info("目标主机解析信息 - 主机名: {}, 规范主机名: {}, IP地址: {}",
+                            addr.getHostName(), addr.getCanonicalHostName(), addr.getHostAddress());
+                } catch (Exception resolveEx) {
+                    log.error("无法解析目标主机信息: {}", resolveEx.getMessage());
+                }
+
+                // 尝试使用Socket直接连接SSH端口
+                try {
+                    log.info("尝试直接通过Socket连接 {}:{} ...", ip, ssh.getPort());
+                    java.net.Socket socket = new java.net.Socket();
+                    socket.connect(new java.net.InetSocketAddress(ip, ssh.getPort()), 5000);
+                    log.info("Socket连接成功，端口 {} 开放", ssh.getPort());
+                    socket.close();
+                } catch (Exception socketEx) {
+                    log.error("Socket连接失败: {}", socketEx.getMessage());
+                }
+            } catch (Exception diagEx) {
+                log.error("执行网络诊断时出错", diagEx);
             }
         }
         return false;

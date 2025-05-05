@@ -1,35 +1,46 @@
 # 开发环境配置
+server:
+  port: 8001
 springdoc:
   paths-to-match: /api/**
   swagger-ui:
     operations-sorter: alpha
 spring:
   influx:
-    url: http://47.92.80.128:8086
-    user: admin
-    password: Wbq123456!?
+    url: http://192.168.5.100:8086
+    user: flying
+    password: influxdb_MWR5TP
+    bucket: program
+    organization: flyingcoding
   mail:
     host: smtp.163.com
     username: javaweb111@163.com
     password: UMUNGOCGACNHANOL
-    port: 25
+    port: 465
+    properties:
+      from: javaweb111@163.com
+      mail:
+        smtp:
+          socketFactory:
+            class: javax.net.ssl.SSLSocketFactory
   rabbitmq:
-    addresses: 47.92.80.128
+    port: 5672
+    addresses: 192.168.5.100
     username: rabbitmq
-    password: qaz13579
+    password: rabbitmq
     virtual-host: /
   datasource:
-    url: jdbc:mysql://47.92.80.128:3306/monitor
+    url: jdbc:mysql://192.168.5.100:3306/monitor
     username: monitor
-    password: ATYPKywdF2c38aiw
+    password: SwCe6mbRBwks6G6d
     driver-class-name: com.mysql.cj.jdbc.Driver
   data:
     redis:
       database: 0
-      host: 47.92.80.128
+      host: 192.168.5.100
       port: 6379
       username: default
-      password: redis_PCpmaT
+      password: redis_EHb2Yc
   security:
     jwt:
       key: 'monitor-key'
