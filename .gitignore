@@ -1,3 +1,10 @@
 .idea
 log
 .DS_Store
+/CLAUDE.md
+.env
+*.env.local
+.ace-tool/
+/monitor-web/.env.production
+/.codex/**
+/AGENTS.md
