@@ -14,13 +14,8 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.util.List;
 
-/**
- * @program: monitor
- * @description: 向服务端发送http请求的工具类
- * @author: 王贝强
- * @create: 2024-07-14 18:36
- */
 @Slf4j
 @Component
 public class NetUtils {
@@ -29,59 +24,135 @@ public class NetUtils {
     @Resource
     ConnectionConfig config;
 
-    private final HttpClient client=HttpClient.newHttpClient();
+    private final HttpClient client = HttpClient.newHttpClient();
 
-    public boolean registerToServer(String address,String token){
+    public boolean registerToServer(String address, String token) {
         log.info("正在向服务端注册，请稍等。。。");
         Response response = this.doGet("/register", address, token);
-        if (response.success()){
+        if (response.success()) {
             log.info("客户端注册已完成！");
-        }else {
-            log.error("客户端注册失败：{}",response.message());
+        } else {
+            log.error("客户端注册失败：{}", response.message());
         }
         return response.success();
     }
-    public void updateBaseDetails(BaseDetail detail){
+
+    public void updateBaseDetails(BaseDetail detail) {
         Response response = this.doPost("/detail", detail);
-        if (response.success()){
+        if (response.success()) {
             log.info("系统基本信息更新完成！");
-        }else {
-            log.error("系统基本信息更新失败：{}",response.message());
+        } else {
+            log.error("系统基本信息更新失败：{}", response.message());
         }
     }
-    public void updateRuntimeDetails(RuntimeDetail detail){
-        Response response = this.doPost("/runtime", detail);
-        if (!response.success())
-            log.info("更新系统运行时状态失败,服务器响应异常信息：{}",response.message());
+
+    public void sendHeartbeat() {
+        Response response = this.doGet("/heartbeat");
+        if (response.success()) {
+            log.debug("心跳发送成功");
+        } else {
+            log.warn("心跳发送失败：{}", response.message());
+        }
     }
-    private Response doGet(String url){
-        return this.doGet(url,config.getAddress(),config.getToken());
+
+    public void notifyShutdown() {
+        log.info("正在通知服务端客户端即将下线...");
+        Response response = this.doGet("/offline");
+        if (response.success()) {
+            log.info("已通知服务端客户端下线");
+        } else {
+            log.warn("通知服务端下线失败：{}", response.message());
+        }
     }
-    private Response doGet(String url,String address,String token){
-        try{
-            HttpRequest request=HttpRequest.newBuilder().GET()
-                    .uri(new URI(address+"/monitor" +url))
-                    .header("Authorization",token)
+
+    /**
+     * 上报运行时数据；上报失败时执行指数退避重试，最终失败则写入本地缓存。
+     *
+     * @param detail 运行时监控数据
+     */
+    public void updateRuntimeDetails(RuntimeDetail detail) {
+        try {
+            RetryUtils.retryWithBackoff(() -> {
+                Response response = this.doPost("/runtime", detail);
+                if (!response.success()) {
+                    String message = response.message() == null ? "未知错误" : response.message();
+                    throw new RuntimeException(message);
+                }
+                return response;
+            }, "上报运行时数据");
+            flushCachedData();
+        } catch (Exception e) {
+            log.warn("上报运行时数据异常，缓存到本地: {}", e.getMessage());
+            LocalCacheUtils.offer(detail);
+        }
+    }
+
+    /**
+     * 按批次补报本地缓存数据，失败时回滚未发送的同批次数据，避免缓存数据丢失。
+     */
+    public void flushCachedData() {
+        if (LocalCacheUtils.isEmpty()) return;
+        log.info("开始补报缓存数据，当前缓存数量：{}", LocalCacheUtils.size());
+        while (!LocalCacheUtils.isEmpty()) {
+            List<RuntimeDetail> batch = LocalCacheUtils.drainBatch();
+            if (batch.isEmpty()) break;
+            for (int i = 0; i < batch.size(); i++) {
+                RuntimeDetail cached = batch.get(i);
+                try {
+                    Response response = this.doPost("/runtime", cached);
+                    if (!response.success()) {
+                        log.warn("补报缓存数据失败：{}", response.message());
+                        LocalCacheUtils.requeueUnsentBatch(batch, i);
+                        return;
+                    }
+                } catch (Exception e) {
+                    log.warn("补报缓存数据异常: {}", e.getMessage());
+                    LocalCacheUtils.requeueUnsentBatch(batch, i);
+                    return;
+                }
+            }
+            if (!LocalCacheUtils.isEmpty()) {
+                try {
+                    Thread.sleep(LocalCacheUtils.getFlushBatchIntervalMs());
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+            }
+        }
+        log.info("缓存数据补报完成");
+    }
+
+    private Response doGet(String url) {
+        return this.doGet(url, config.getAddress(), config.getToken());
+    }
+
+    private Response doGet(String url, String address, String token) {
+        try {
+            HttpRequest request = HttpRequest.newBuilder().GET()
+                    .uri(new URI(address + "/monitor" + url))
+                    .header("Authorization", token)
                     .build();
-            HttpResponse<String> response=client.send(request,HttpResponse.BodyHandlers.ofString());
+            HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
             return JSONObject.parseObject(response.body()).to(Response.class);
-        }catch (Exception e){
-            log.error("向服务端发起GET请求出现问题",e);
+        } catch (Exception e) {
+            log.error("向服务端发起GET请求出现问题", e);
             return Response.errorResponse(e);
         }
     }
-    private Response doPost(String url,Object data){
-        try{
-            String rawData=JSONObject.from(data).toJSONString();
-           HttpRequest request=HttpRequest.newBuilder().POST(HttpRequest.BodyPublishers.ofString(rawData))
-                   .uri(new URI(config.getAddress()+"/monitor"+url))
-                   .header("Authorization",config.getToken())
-                   .header("Content-Type","application/json")
-                   .build();
-           HttpResponse<String> response =client.send(request,HttpResponse.BodyHandlers.ofString());
-           return JSONObject.parseObject(response.body()).to(Response.class);
-        }catch (Exception e){
-            log.error("向服务端发起POST请求出现问题",e);
+
+    private Response doPost(String url, Object data) {
+        try {
+            String rawData = JSONObject.from(data).toJSONString();
+            HttpRequest request = HttpRequest.newBuilder().POST(HttpRequest.BodyPublishers.ofString(rawData))
+                    .uri(new URI(config.getAddress() + "/monitor" + url))
+                    .header("Authorization", config.getToken())
+                    .header("Content-Type", "application/json")
+                    .build();
+            HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+            return JSONObject.parseObject(response.body()).to(Response.class);
+        } catch (Exception e) {
+            log.error("向服务端发起POST请求出现问题", e);
             return Response.errorResponse(e);
         }
     }
