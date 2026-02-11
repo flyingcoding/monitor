@@ -179,7 +179,7 @@ function deleteAccount(id) {
       <div class="title"><i class="fa-solid fa-users"></i> 子用户管理</div>
       <el-divider style="margin: 10px 0"/>
       <div v-if="accounts.length" style="text-align: center">
-        <div v-for="item in accounts" class="account-card">
+        <div v-for="item in accounts" :key="item.id" class="account-card">
           <el-avatar class="avatar" :size="30"
                      src="https://cube.elemecdn.com/0/88/03b0d39583f48206768a7534e55bcpng.png"/>
           <div style="margin-left: 15px;line-height: 18px;flex: 1">

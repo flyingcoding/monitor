@@ -5,27 +5,37 @@
   "scripts": {
     "dev": "vite --host",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "lint": "eslint . --ext .js,.vue --max-warnings=0",
+    "lint:fix": "npm run lint -- --fix",
+    "format": "prettier . --write",
+    "format:check": "prettier . --check",
+    "check": "npm run lint && npm run build",
+    "check:ci": "npm run lint && npm run build && npm audit --audit-level=moderate"
   },
   "dependencies": {
-    "@element-plus/icons-vue": "^2.1.0",
-    "@vueuse/core": "^10.3.0",
+    "@element-plus/icons-vue": "^2.3.2",
+    "@vueuse/core": "^10.11.1",
     "@xterm/addon-attach": "^0.11.0",
     "@xterm/xterm": "^5.5.0",
-    "axios": "1.6.0",
-    "echarts": "^5.5.1",
-    "element-plus": "^2.3.9",
-    "flag-icons": "^7.2.3",
-    "pinia": "^2.1.7",
-    "pinia-plugin-persistedstate": "^3.2.1",
-    "vue": "^3.3.4",
-    "vue-router": "^4.2.4"
+    "axios": "^1.13.5",
+    "echarts": "^5.6.0",
+    "element-plus": "^2.13.2",
+    "flag-icons": "^7.5.0",
+    "pinia": "^2.3.1",
+    "pinia-plugin-persistedstate": "^3.2.3",
+    "vue": "^3.5.28",
+    "vue-router": "^4.6.4"
   },
   "devDependencies": {
-    "@vitejs/plugin-vue": "^4.2.3",
-    "less": "^4.2.0",
-    "unplugin-auto-import": "^0.15.2",
+    "@vitejs/plugin-vue": "^5.2.4",
+    "eslint": "^8.57.1",
+    "eslint-config-prettier": "^9.1.0",
+    "eslint-plugin-vue": "^9.33.0",
+    "less": "^4.5.1",
+    "prettier": "^3.6.2",
+    "unplugin-auto-import": "^0.15.3",
     "unplugin-vue-components": "^0.24.1",
-    "vite": "^4.4.6"
+    "vite": "^6.4.1"
   }
 }

@@ -1,7 +1,7 @@
 <script setup>
 import {copyIp, fitByUnit, osNameToIcon, percentageToStatus, rename} from "@/tools";
 
-const props=defineProps({
+defineProps({
   data:Object,
   update:Function
 })

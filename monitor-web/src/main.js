@@ -9,7 +9,7 @@ import 'element-plus/theme-chalk/dark/css-vars.css'
 import piniaPluginPersistedstate from 'pinia-plugin-persistedstate'
 import {createPinia} from "pinia";
 
-axios.defaults.baseURL = 'http://localhost:8080'
+axios.defaults.baseURL = import.meta.env.VITE_API_BASE_URL || ''
 
 const app = createApp(App)
 const pinia=createPinia()

@@ -3,7 +3,7 @@
     <el-header class="main-header">
       <el-image src="icon.svg" style="height: 40px"></el-image>
       <div class="tabs">
-        <tab-item v-for="item in tabs" :name="item.name"
+        <tab-item v-for="item in tabs" :key="item.id" :name="item.name"
                   :active="item.id === tab" @click="changePage(item)"/>
         <el-switch style="margin: 0 20px"
                    v-model="dark" active-color="#424242"

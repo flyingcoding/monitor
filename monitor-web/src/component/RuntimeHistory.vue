@@ -1,18 +1,18 @@
 <script setup>
-import {onMounted, watch} from "vue";
+import {onBeforeUnmount, onMounted, watch} from "vue";
 import * as echarts from "echarts";
 import {defaultOption, doubleSeries, singleSeries} from "@/echarts";
 
-const charts=[]
-const props=defineProps({
-  data:Object
+const charts = []
+const props = defineProps({
+  data: Object
 })
 
 const localTimeLine = list => list.map(item => new Date(item.timestamp).toLocaleString())
 
 function updateCpuUsage(list) {
-  const chart=charts[0]
-  let data=list.map(item=>(item.cpuUsage * 100).toFixed(1))
+  const chart = charts[0]
+  let data = list.map(item => (item.cpuUsage * 100).toFixed(1))
   const option = defaultOption('CPU(%)', localTimeLine(list))
   singleSeries(option, 'CPU使用率(%)', data, ['#72c4fe', '#72d5fe', '#2b6fd733'])
   chart.setOption(option)
@@ -67,14 +67,27 @@ function initCharts() {
   }
 }
 
-onMounted(()=>{
+function handleResize() {
+  charts.forEach(chart => chart && chart.resize())
+}
+
+onMounted(() => {
   initCharts()
-  watch(()=>props.data,list=>{
+  window.addEventListener('resize', handleResize)
+  watch(() => props.data, (list) => {
+    if (!list || !list.length) return
     updateCpuUsage(list)
     updateMemoryUsage(list)
     updateNetworkUsage(list)
     updateDiskUsage(list)
-  },{ immediate:true,deep:true })
+  }, {immediate: true, deep: true})
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('resize', handleResize)
+  charts.forEach(chart => {
+    if (chart) chart.dispose()
+  })
 })
 </script>
 

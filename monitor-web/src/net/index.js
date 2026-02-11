@@ -49,6 +49,29 @@ function deleteAccessToken() {
     sessionStorage.removeItem(authItemName)
 }
 
+// GET 请求自动重试拦截器
+axios.interceptors.response.use(
+    response => response,
+    error => {
+        const config = error.config
+        if (!config || config.method !== 'get') return Promise.reject(error)
+
+        const status = error.response ? error.response.status : 0
+        // 401 不重试，直接跳转登录页
+        if (status === 401) return Promise.reject(error)
+        // 仅对 5xx 和网络错误重试
+        if (status < 500 && status !== 0) return Promise.reject(error)
+
+        config.__retryCount = config.__retryCount || 0
+        if (config.__retryCount >= 2) return Promise.reject(error)
+
+        config.__retryCount++
+        const delay = 1000 * Math.pow(2, config.__retryCount - 1)
+        return new Promise(resolve => setTimeout(resolve, delay))
+            .then(() => axios(config))
+    }
+)
+
 function internalPost(url, data, headers, success, failure, error = defaultError){
     axios.post(url, data, { headers: headers }).then(({data}) => {
         if(data.code === 200)

@@ -1,5 +1,5 @@
 <script setup>
-import {computed, reactive, watch} from "vue";
+import {computed, onBeforeUnmount, reactive, watch} from "vue";
 import {get, post} from "@/net";
 import {copyIp, cpuNameToImage, fitByUnit, osNameToIcon, percentageToStatus, rename} from "@/tools";
 import {ElMessage, ElMessageBox} from "element-plus";
@@ -66,15 +66,46 @@ function deleteClient() {
   }).catch(() => {})
 }
 
-setInterval(() => {
-  if(props.id !== -1 && details.runtime) {
-    get(`/api/monitor/runtime_now?clientId=${props.id}`, data => {
-      if(details.runtime.list.length >= 360)
-        details.runtime.list.splice(0, 1)
-      details.runtime.list.push(data)
-    })
+// 获取 token 用于 SSE
+function getToken() {
+  const str = localStorage.getItem('authorize') || sessionStorage.getItem('authorize')
+  if (!str) return null
+  return JSON.parse(str).token
+}
+
+// SSE 订阅替代轮询
+let runtimeEventSource = null
+function connectRuntimeSSE(clientId) {
+  if (runtimeEventSource) {
+    runtimeEventSource.close()
+    runtimeEventSource = null
   }
-}, 10000)
+  if (clientId === -1) return
+  const token = getToken()
+  if (!token) return
+  const baseUrl = import.meta.env.VITE_API_BASE_URL || ''
+  runtimeEventSource = new EventSource(`${baseUrl}/api/sse/runtime/${clientId}?token=${token}`)
+  runtimeEventSource.addEventListener('runtime', (event) => {
+    const data = JSON.parse(event.data)
+    if (details.runtime.list.length >= 360)
+      details.runtime.list.splice(0, 1)
+    details.runtime.list.push(data)
+  })
+  runtimeEventSource.onerror = () => {
+    if (runtimeEventSource) runtimeEventSource.close()
+    // 降级为轮询
+    setTimeout(() => {
+      if (props.id !== -1) connectRuntimeSSE(props.id)
+    }, 10000)
+  }
+}
+
+onBeforeUnmount(() => {
+  if (runtimeEventSource) {
+    runtimeEventSource.close()
+    runtimeEventSource = null
+  }
+})
 
 const now = computed(()=>details.runtime.list[details.runtime.list.length -1])
 
@@ -82,9 +113,16 @@ const init = value =>{
   if(value!==-1){
     details.base={}
     details.runtime={ list:[] }
+    connectRuntimeSSE(value)
     get(`/api/monitor/details?clientId=${value}`,data=>Object.assign(details.base, data))
-    get(`/api/monitor/runtime_history?clientId=${value}`,data=>Object.assign(details.runtime, data))
-
+    get(`/api/monitor/runtime_history?clientId=${value}`,data=>{
+      Object.assign(details.runtime, data)
+    })
+  } else {
+    if (runtimeEventSource) {
+      runtimeEventSource.close()
+      runtimeEventSource = null
+    }
   }
 }
 watch(()=>props.id,init,{immediate:true})
@@ -148,7 +186,7 @@ watch(()=>props.id,init,{immediate:true})
             <div style="display: inline-block;height: 15px">
               <div style="display: flex">
                 <el-select v-model="nodeEdit.location" style="width: 80px" size="small">
-                  <el-option v-for="item in locations" :value="item.name">
+                  <el-option v-for="item in locations" :key="item.name" :value="item.name">
                     <span :class="`fi fi-${item.name}`"></span>&nbsp;
                     {{item.desc}}
                   </el-option>

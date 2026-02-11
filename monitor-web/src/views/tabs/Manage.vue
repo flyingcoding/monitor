@@ -1,6 +1,6 @@
 <script setup>
 import PreviewCard from "@/component/PreviewCard.vue";
-import {computed, reactive, ref} from "vue";
+import {computed, onBeforeUnmount, reactive, ref} from "vue";
 import {get} from "@/net";
 import ClientDetails from "@/component/ClientDetails.vue";
 import RegisterCard from "@/component/RegisterCard.vue";
@@ -22,13 +22,49 @@ const locations = [
 const store=useStore()
 const list=ref([])
 const route =useRoute()
-const updateList=()=> {
-  if (route.name==="manage") {
+
+// 获取 token 用于 SSE
+function getToken() {
+  const str = localStorage.getItem('authorize') || sessionStorage.getItem('authorize')
+  if (!str) return null
+  return JSON.parse(str).token
+}
+
+// SSE 订阅替代轮询
+let eventSource = null
+function connectSSE() {
+  const token = getToken()
+  if (!token) return
+  const baseUrl = import.meta.env.VITE_API_BASE_URL || ''
+  eventSource = new EventSource(`${baseUrl}/api/sse/clients?token=${token}`)
+  eventSource.addEventListener('clients', (event) => {
+    list.value = JSON.parse(event.data)
+  })
+  eventSource.onerror = () => {
+    if (eventSource) eventSource.close()
+    // 降级为轮询
+    setTimeout(() => {
+      if (route.name === 'manage') connectSSE()
+    }, 10000)
+  }
+}
+
+// 手动更新（用于删除/重命名等操作后刷新）
+const updateList = () => {
+  if (route.name === "manage") {
     get("/api/monitor/list", data => list.value = data)
   }
 }
-setInterval(updateList,10000)
-updateList()
+
+connectSSE()
+
+onBeforeUnmount(() => {
+  if (eventSource) {
+    eventSource.close()
+    eventSource = null
+  }
+})
+
 const register = reactive({
   show: false,
   token: ''
@@ -47,7 +83,7 @@ const clientList=computed(()=>{
   if (checkedNodes.value.length===0){
     return list.value
   }else {
-    return list.value.filter(item=>checkedNodes.value.indexOf(item.location)>0)
+    return list.value.filter(item=>checkedNodes.value.includes(item.location))
   }
 
 })
@@ -87,7 +123,7 @@ const terminal=reactive({
     </el-checkbox-group>
   </div>
   <div class="card-list" v-if="list.length">
-    <preview-card v-for="item in clientList" :data="item" :update="updateList" @click="displayClientDetails(item.id)"/>
+    <preview-card v-for="item in clientList" :key="item.id" :data="item" :update="updateList" @click="displayClientDetails(item.id)"/>
   </div>
   <el-empty description="当前无主机连接，请点击添加主机按钮" v-else/>
   <el-drawer size="520" :show-close="false" v-model="detail.show"

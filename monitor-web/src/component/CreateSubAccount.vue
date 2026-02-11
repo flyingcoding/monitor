@@ -103,7 +103,7 @@ function createSubAccount() {
         <div class="desc">请在下方选择允许子账户访问的服务器列表。</div>
       </div>
       <el-scrollbar style="flex: 1">
-        <div class="client-card" v-for="item in clients">
+        <div class="client-card" v-for="item in clients" :key="item.id">
           <el-checkbox @change="state => onCheck(state, item.id)"/>
           <div style="margin-left: 20px">
             <div style="font-size: 14px;font-weight: bold">
