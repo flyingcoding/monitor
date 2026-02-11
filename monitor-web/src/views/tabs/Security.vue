@@ -113,6 +113,14 @@ const initSubAccounts = () =>
 
 const createAccount = ref(false)
 
+/**
+ * 处理子账户创建完成事件，关闭抽屉并刷新子账户列表。
+ */
+function handleCreateAccount() {
+  createAccount.value = false
+  initSubAccounts()
+}
+
 function deleteAccount(id) {
   get(`/api/user/sub/delete?uid=${id}`, () => {
     ElMessage.success('子账户删除成功')
@@ -206,7 +214,7 @@ function deleteAccount(id) {
       </div>
     </div>
     <el-drawer v-model="createAccount" size="350" :with-header="false">
-      <create-sub-account :clients="simpleList" @create="createAccount = false;initSubAccounts()"/>
+      <create-sub-account :clients="simpleList" @create="handleCreateAccount"/>
     </el-drawer>
   </div>
 </template>

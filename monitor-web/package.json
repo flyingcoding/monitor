@@ -2,16 +2,17 @@
   "name": "monitor-web",
   "version": "0.0.0",
   "private": true,
+  "packageManager": "pnpm@10.28.2",
   "scripts": {
     "dev": "vite --host",
     "build": "vite build",
     "preview": "vite preview",
     "lint": "eslint . --ext .js,.vue --max-warnings=0",
-    "lint:fix": "npm run lint -- --fix",
+    "lint:fix": "pnpm run lint -- --fix",
     "format": "prettier . --write",
     "format:check": "prettier . --check",
-    "check": "npm run lint && npm run build",
-    "check:ci": "npm run lint && npm run build && npm audit --audit-level=moderate"
+    "check": "pnpm run lint && pnpm run build",
+    "check:ci": "pnpm run lint && pnpm run build && pnpm audit --audit-level=moderate"
   },
   "dependencies": {
     "@element-plus/icons-vue": "^2.3.2",
