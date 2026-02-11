@@ -6,11 +6,14 @@ import com.example.entity.vo.request.RuntimeDetailVO;
 import com.example.entity.vo.response.RuntimeHistoryVO;
 import com.influxdb.client.InfluxDBClient;
 import com.influxdb.client.InfluxDBClientFactory;
-import com.influxdb.client.WriteApiBlocking;
+import com.influxdb.client.WriteApi;
+import com.influxdb.client.WriteOptions;
 import com.influxdb.client.domain.WritePrecision;
 import com.influxdb.query.FluxRecord;
 import com.influxdb.query.FluxTable;
 import jakarta.annotation.PostConstruct;
+import jakarta.annotation.PreDestroy;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
@@ -18,12 +21,7 @@ import org.springframework.stereotype.Component;
 import java.util.Date;
 import java.util.List;
 
-/**
- * @program: monitor
- * @description: influxDB工具类
- * @author: 王贝强
- * @create: 2024-07-16 16:54
- */
+@Slf4j
 @Component
 public class influxDBUtils {
     @Value("${spring.influx.url}")
@@ -38,21 +36,43 @@ public class influxDBUtils {
     String ORG;
 
     private InfluxDBClient client;
+    private WriteApi writeApi;
 
     @PostConstruct
-    public void init(){
-        client = InfluxDBClientFactory.create(url,user,password.toCharArray());
+    public void init() {
+        client = InfluxDBClientFactory.create(url, user, password.toCharArray());
+        WriteOptions writeOptions = WriteOptions.builder()
+                .batchSize(100)
+                .flushInterval(5000)
+                .bufferLimit(10000)
+                .maxRetries(3)
+                .retryInterval(2000)
+                .build();
+        writeApi = client.makeWriteApi(writeOptions);
+        writeApi.listenEvents(com.influxdb.client.write.events.WriteErrorEvent.class, event -> {
+            log.error("InfluxDB异步写入失败: {}", event.getThrowable().getMessage());
+        });
     }
 
-    public void writeRuntimeData(int clientId, RuntimeDetailVO vo){
-        RuntimeData data=new RuntimeData();
-        BeanUtils.copyProperties(vo,data);
+    @PreDestroy
+    public void close() {
+        if (writeApi != null) {
+            writeApi.close();
+        }
+        if (client != null) {
+            client.close();
+        }
+    }
+
+    public void writeRuntimeData(int clientId, RuntimeDetailVO vo) {
+        RuntimeData data = new RuntimeData();
+        BeanUtils.copyProperties(vo, data);
         data.setClientId(clientId);
         data.setTimestamp(new Date(vo.getTimestamp()).toInstant());
-        WriteApiBlocking writeApi = client.getWriteApiBlocking();
-        writeApi.writeMeasurement(BUCKET,ORG, WritePrecision.NS,data);
+        writeApi.writeMeasurement(BUCKET, ORG, WritePrecision.NS, data);
     }
-    public RuntimeHistoryVO readRuntimeHistory(int clientId){
+
+    public RuntimeHistoryVO readRuntimeHistory(int clientId) {
         RuntimeHistoryVO vo = new RuntimeHistoryVO();
         String query = """
                 from(bucket: "%s")
@@ -60,7 +80,7 @@ public class influxDBUtils {
                 |> filter(fn: (r) => r["_measurement"] == "runtime")
                 |> filter(fn: (r) => r["clientId"] == "%s")
                 """;
-        String format =String.format(query,BUCKET,"-1h",clientId);
+        String format = String.format(query, BUCKET, "-1h", clientId);
         List<FluxTable> tables = client.getQueryApi().query(format, ORG);
         int size = tables.size();
         if (size == 0) return vo;

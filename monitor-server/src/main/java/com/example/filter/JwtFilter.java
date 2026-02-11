@@ -41,6 +41,13 @@ public class JwtFilter extends OncePerRequestFilter {
                                     @NotNull HttpServletResponse response,
                                     @NotNull FilterChain filterChain) throws ServletException, IOException {
         String authorization = request.getHeader("Authorization");
+        // SSE 端点支持从 query parameter 获取 token
+        if (authorization == null && request.getRequestURI().startsWith("/api/sse/")) {
+            String tokenParam = request.getParameter("token");
+            if (tokenParam != null) {
+                authorization = "Bearer " + tokenParam;
+            }
+        }
         String uri=request.getRequestURI();
         if (uri.startsWith("/monitor")){
             if (!uri.endsWith("/register")){

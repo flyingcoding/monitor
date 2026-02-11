@@ -7,43 +7,56 @@ springdoc:
     operations-sorter: alpha
 spring:
   influx:
-    url: http://192.168.5.100:8086
-    user: flying
-    password: influxdb_MWR5TP
-    bucket: program
-    organization: flyingcoding
+    url: ${INFLUX_URL:http://192.168.5.100:8086}
+    user: ${INFLUX_USER:flying}
+    password: ${INFLUX_PASSWORD:influxdb_MWR5TP}
+    bucket: ${INFLUX_BUCKET:program}
+    organization: ${INFLUX_ORG:flyingcoding}
   mail:
-    host: smtp.163.com
-    username: javaweb111@163.com
-    password: UMUNGOCGACNHANOL
-    port: 465
+    host: ${MAIL_HOST:smtp.163.com}
+    username: ${MAIL_USERNAME:javaweb111@163.com}
+    password: ${MAIL_PASSWORD:UMUNGOCGACNHANOL}
+    port: ${MAIL_PORT:465}
     properties:
-      from: javaweb111@163.com
+      from: ${MAIL_FROM:javaweb111@163.com}
       mail:
         smtp:
           socketFactory:
             class: javax.net.ssl.SSLSocketFactory
   rabbitmq:
-    port: 5672
-    addresses: 192.168.5.100
-    username: rabbitmq
-    password: rabbitmq
+    port: ${RABBITMQ_PORT:5672}
+    addresses: ${RABBITMQ_HOST:192.168.5.100}
+    username: ${RABBITMQ_USER:rabbitmq}
+    password: ${RABBITMQ_PASSWORD:rabbitmq}
     virtual-host: /
+    listener:
+      simple:
+        retry:
+          enabled: true
+          max-attempts: 3
+          initial-interval: 2000
+          multiplier: 2
+        default-requeue-rejected: false
   datasource:
-    url: jdbc:mysql://192.168.5.100:3306/monitor
-    username: monitor
-    password: SwCe6mbRBwks6G6d
+    url: ${MYSQL_URL:jdbc:mysql://192.168.5.100:3306/monitor}
+    username: ${MYSQL_USER:monitor}
+    password: ${MYSQL_PASSWORD:SwCe6mbRBwks6G6d}
     driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      minimum-idle: 5
+      maximum-pool-size: 20
+      idle-timeout: 300000
+      max-lifetime: 1800000
   data:
     redis:
       database: 0
-      host: 192.168.5.100
-      port: 6379
-      username: default
-      password: redis_EHb2Yc
+      host: ${REDIS_HOST:192.168.5.100}
+      port: ${REDIS_PORT:6379}
+      username: ${REDIS_USERNAME:default}
+      password: ${REDIS_PASSWORD:redis_EHb2Yc}
   security:
     jwt:
-      key: 'monitor-key'
+      key: ${JWT_KEY:monitor-key}
       expire: 72
       limit:
         base: 10
@@ -62,3 +75,8 @@ spring:
       origin: '*'
       credentials: false
       methods: '*'
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health

@@ -17,6 +17,8 @@ import java.util.List;
 public interface ClientService extends IService<Client>{
     String getToken();
     boolean registerClient(String token);
+    void updateHeartbeat(Client client);
+    void clientOffline(Client client);
     Client findClientById(int id);
     Client findClientByToken(String token);
     void updateClientDetail(ClientDetailVO vo,Client client);

@@ -9,27 +9,48 @@ mybatis-plus:
     log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
 spring:
   influx:
-    url: http://localhost:8086
-    user: admin
-    password: Wbq123456!?
+    url: ${INFLUX_URL}
+    user: ${INFLUX_USER}
+    password: ${INFLUX_PASSWORD}
+    bucket: ${INFLUX_BUCKET:program}
+    organization: ${INFLUX_ORG:flyingcoding}
   mail:
-    host: smtp.163.com
-    username: javaweb111@163.com
-    password: UMUNGOCGACNHANOL
-    port: 25
+    host: ${MAIL_HOST:smtp.163.com}
+    username: ${MAIL_USERNAME}
+    password: ${MAIL_PASSWORD}
+    port: ${MAIL_PORT:25}
   rabbitmq:
-    addresses: localhost
-    username: rabbitmq
-    password: qaz13579
+    addresses: ${RABBITMQ_HOST:localhost}
+    username: ${RABBITMQ_USER}
+    password: ${RABBITMQ_PASSWORD}
     virtual-host: /
+    listener:
+      simple:
+        retry:
+          enabled: true
+          max-attempts: 3
+          initial-interval: 2000
+          multiplier: 2
+        default-requeue-rejected: false
   datasource:
-    url: jdbc:mysql://localhost:3306/monitor
-    username: monitor
-    password: 123456
+    url: ${MYSQL_URL:jdbc:mysql://localhost:3306/monitor}
+    username: ${MYSQL_USER}
+    password: ${MYSQL_PASSWORD}
     driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      minimum-idle: 5
+      maximum-pool-size: 20
+      idle-timeout: 300000
+      max-lifetime: 1800000
+  data:
+    redis:
+      database: 0
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD}
   security:
     jwt:
-      key: 'monitor-key'
+      key: ${JWT_KEY}
       expire: 72
       limit:
         base: 10
@@ -48,3 +69,8 @@ spring:
       origin: '*'
       credentials: false
       methods: '*'
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health

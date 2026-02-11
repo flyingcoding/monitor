@@ -26,6 +26,16 @@ public class ClientController {
     public RestBean<Void> registerClient(@RequestHeader("Authorization") String token){
         return clientService.registerClient(token) ? RestBean.success() :RestBean.failure(401,"客户端注册失败，请检查Token是否正确！");
     }
+    @GetMapping("/heartbeat")
+    public RestBean<Void> heartbeat(@RequestAttribute(Const.ATTR_CLIENT)Client client){
+        clientService.updateHeartbeat(client);
+        return RestBean.success();
+    }
+    @GetMapping("/offline")
+    public RestBean<Void> offline(@RequestAttribute(Const.ATTR_CLIENT)Client client){
+        clientService.clientOffline(client);
+        return RestBean.success();
+    }
     @PostMapping("/detail")
     public RestBean<Void> updateClientDetails(@RequestAttribute(Const.ATTR_CLIENT)Client client,
                                              @RequestBody @Valid ClientDetailVO vo){
