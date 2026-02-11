@@ -1,8 +1,8 @@
 <template>
-  <div style="text-align: center;margin: 0 20px">
+  <div style="text-align: center; margin: 0 20px">
     <div style="margin-top: 150px">
-      <div style="font-size: 25px;font-weight: bold">登录</div>
-      <div style="font-size: 14px;color: grey">在进入系统之前请先输入用户名和密码进行登录</div>
+      <div style="font-size: 25px; font-weight: bold">登录</div>
+      <div style="font-size: 14px; color: grey">在进入系统之前请先输入用户名和密码进行登录</div>
     </div>
     <div style="margin-top: 50px">
       <el-form :model="form" :rules="rules" ref="formRef">
@@ -10,16 +10,22 @@
           <el-input v-model="form.username" maxlength="20" type="text" placeholder="用户名/邮箱">
             <template #prefix>
               <el-icon>
-                <User/>
+                <User />
               </el-icon>
             </template>
           </el-input>
         </el-form-item>
         <el-form-item prop="password">
-          <el-input v-model="form.password" type="password" maxlength="20" style="margin-top: 10px" placeholder="密码">
+          <el-input
+            v-model="form.password"
+            type="password"
+            maxlength="20"
+            style="margin-top: 10px"
+            placeholder="密码"
+          >
             <template #prefix>
               <el-icon>
-                <Lock/>
+                <Lock />
               </el-icon>
             </template>
           </el-input>
@@ -27,7 +33,7 @@
         <el-row style="margin-top: 5px">
           <el-col :span="12" style="text-align: left">
             <el-form-item prop="remember">
-              <el-checkbox v-model="form.remember" label="记住我"/>
+              <el-checkbox v-model="form.remember" label="记住我" />
             </el-form-item>
           </el-col>
           <el-col :span="12" style="text-align: right">
@@ -43,10 +49,10 @@
 </template>
 
 <script setup>
-import {User, Lock} from '@element-plus/icons-vue'
-import router from "@/router";
-import {reactive, ref} from "vue";
-import {login} from '@/net'
+import { User, Lock } from '@element-plus/icons-vue'
+import router from '@/router'
+import { reactive, ref } from 'vue'
+import { login } from '@/net'
 
 const formRef = ref()
 const form = reactive({
@@ -56,23 +62,17 @@ const form = reactive({
 })
 
 const rules = {
-  username: [
-    { required: true, message: '请输入用户名' }
-  ],
-  password: [
-    { required: true, message: '请输入密码'}
-  ]
+  username: [{ required: true, message: '请输入用户名' }],
+  password: [{ required: true, message: '请输入密码' }]
 }
 
 function userLogin() {
   formRef.value.validate((isValid) => {
-    if(isValid) {
-      login(form.username, form.password, form.remember, () => router.push("/index"))
+    if (isValid) {
+      login(form.username, form.password, form.remember, () => router.push('/index'))
     }
-  });
+  })
 }
 </script>
 
-<style scoped>
-
-</style>
+<style scoped></style>

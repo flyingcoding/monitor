@@ -9,15 +9,16 @@ useDark({
 })
 
 useDark({
-  onChanged(dark) { useToggle(dark) }
+  onChanged(dark) {
+    useToggle(dark)
+  }
 })
-
 </script>
 
 <template>
   <header>
     <div class="wrapper">
-      <router-view/>
+      <router-view />
     </div>
   </header>
 </template>

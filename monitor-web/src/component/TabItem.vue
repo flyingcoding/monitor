@@ -1,33 +1,33 @@
 <script setup>
 defineProps({
-  name:String,
-  active:Boolean
+  name: String,
+  active: Boolean
 })
 </script>
 
 <template>
   <div :class="`tab-item ${active ? 'active' : ''}`">
-    {{name}}
+    {{ name }}
   </div>
 </template>
 
 <style scoped>
-.tab-item{
+.tab-item {
   font-size: 15px;
   width: 55px;
   height: 55px;
   text-align: center;
   line-height: 55px;
   box-sizing: border-box;
-  transition: color .3s;
+  transition: color 0.3s;
 
-  &:hover{
+  &:hover {
     cursor: pointer;
     color: var(--el-color-primary);
   }
 }
 
-.active{
-  border-bottom: solid 2px  var(--el-color-primary);
+.active {
+  border-bottom: solid 2px var(--el-color-primary);
 }
 </style>
