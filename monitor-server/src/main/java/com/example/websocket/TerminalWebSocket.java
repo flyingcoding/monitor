@@ -2,6 +2,7 @@ package com.example.websocket;
 
 import com.example.entity.dto.ClientSsh;
 import com.example.mapper.ClientSshMapper;
+import com.example.utils.CryptoUtils;
 import com.jcraft.jsch.ChannelShell;
 import com.jcraft.jsch.JSch;
 import com.jcraft.jsch.JSchException;
@@ -28,10 +29,26 @@ import java.util.concurrent.Executors;
 public class TerminalWebSocket {
 
     private static ClientSshMapper sshMapper;
+    private static CryptoUtils cryptoUtils;
 
+    /**
+     * 注入SSH配置Mapper，供WebSocket端点静态访问。
+     *
+     * @param sshMapper SSH配置Mapper
+     */
     @Resource
     public void setSshMapper(ClientSshMapper sshMapper) {
         TerminalWebSocket.sshMapper = sshMapper;
+    }
+
+    /**
+     * 注入密码加解密工具，供WebSocket端点静态访问。
+     *
+     * @param cryptoUtils 密码加解密工具
+     */
+    @Resource
+    public void setCryptoUtils(CryptoUtils cryptoUtils) {
+        TerminalWebSocket.cryptoUtils = cryptoUtils;
     }
 
     private static final Map<Session, Shell> sessionMap = new ConcurrentHashMap<>();
@@ -84,6 +101,15 @@ public class TerminalWebSocket {
         session.close();
     }
 
+    /**
+     * 建立到目标主机的SSH连接并绑定到当前WebSocket会话。
+     *
+     * @param session WebSocket会话
+     * @param ssh SSH配置
+     * @param ip 目标IP
+     * @return 是否创建成功
+     * @throws IOException 关闭会话时可能抛出的异常
+     */
     private boolean createSshConnection(Session session, ClientSsh ssh, String ip) throws IOException{
         log.info("开始尝试SSH连接，用户: {}，IP: {}，端口: {}", ssh.getUsername(), ip, ssh.getPort());
         try {
@@ -91,7 +117,8 @@ public class TerminalWebSocket {
             log.info("已创建JSch实例");
             com.jcraft.jsch.Session js = jSch.getSession(ssh.getUsername(), ip, ssh.getPort());
             log.info("已获取JSch Session，准备进行连接配置");
-            js.setPassword(ssh.getPassword());
+            String password = cryptoUtils == null ? ssh.getPassword() : cryptoUtils.decrypt(ssh.getPassword());
+            js.setPassword(password);
             js.setConfig("StrictHostKeyChecking", "no");
             js.setTimeout(10000);
             log.info("SSH连接参数设置完毕，尝试连接到 {}:{}", ip, ssh.getPort());

@@ -33,4 +33,27 @@ public interface ClientService extends IService<Client>{
     void deleteClient(int clientId);
     void saveSshConnection(SshConnectVO vo);
     SshSettingsVO getSshSetting(int clientId);
+
+    /**
+     * 查询需要主动健康探测的客户端。
+     *
+     * @param staleThresholdMs 过期阈值毫秒
+     * @return 待探测客户端列表
+     */
+    List<Client> listHealthCheckCandidates(long staleThresholdMs);
+
+    /**
+     * 查询指定客户端的SSH配置。
+     *
+     * @param clientId 客户端ID
+     * @return SSH配置
+     */
+    ClientSsh findClientSsh(int clientId);
+
+    /**
+     * 强制将客户端标记为离线。
+     *
+     * @param clientId 客户端ID
+     */
+    void forceClientOffline(int clientId);
 }

@@ -11,6 +11,7 @@ import java.util.function.Consumer;
 /**
  * 用于DTO快速转换VO实现，只需将DTO类继承此类即可使用
  */
+@Deprecated
 public interface BaseData {
     /**
      * 创建指定的VO类并将当前DTO对象中的所有成员变量值直接复制到VO对象中

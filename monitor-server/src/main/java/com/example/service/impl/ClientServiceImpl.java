@@ -10,9 +10,11 @@ import com.example.entity.vo.response.*;
 import com.example.mapper.ClientDetailMapper;
 import com.example.mapper.ClientMapper;
 import com.example.mapper.ClientSshMapper;
+import com.example.mapper.struct.ClientStructMapper;
 import com.example.service.ClientService;
-import com.example.utils.influxDBUtils;
 import com.example.controller.SseController;
+import com.example.utils.CryptoUtils;
+import com.example.utils.InfluxDbUtils;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import jakarta.annotation.PostConstruct;
@@ -46,7 +48,7 @@ public class ClientServiceImpl extends ServiceImpl<ClientMapper, Client> impleme
     private final Map<Integer, Long> heartbeatMap = new ConcurrentHashMap<>();
 
     @Resource
-    influxDBUtils influx;
+    InfluxDbUtils influx;
 
     @Lazy
     @Resource
@@ -56,6 +58,10 @@ public class ClientServiceImpl extends ServiceImpl<ClientMapper, Client> impleme
     private ClientDetailMapper clientDetailMapper;
     @Resource
     private ClientSshMapper clientSshMapper;
+    @Resource
+    private ClientStructMapper clientStructMapper;
+    @Resource
+    private CryptoUtils cryptoUtils;
 
     @PostConstruct
     public void initClientCache() {
@@ -149,11 +155,19 @@ public class ClientServiceImpl extends ServiceImpl<ClientMapper, Client> impleme
         sseController.pushClientList();
     }
 
+    /**
+     * 汇总客户端基础信息、详情信息和实时状态，返回用于管理页展示的列表数据。
+     *
+     * @return 客户端预览列表
+     */
     @Override
     public List<ClientPreviewVO> listClients() {
         return clientIdCache.asMap().values().stream().map(client -> {
-            ClientPreviewVO vo = client.asViewObject(ClientPreviewVO.class);
-            BeanUtils.copyProperties(clientDetailMapper.selectById(client.getId()), vo);
+            ClientPreviewVO vo = clientStructMapper.toPreviewVO(client);
+            ClientDetail detail = clientDetailMapper.selectById(client.getId());
+            if (detail != null) {
+                BeanUtils.copyProperties(detail, vo);
+            }
             RuntimeDetailVO runtime = currentRuntime.getIfPresent(client.getId());
             if (this.isOnline(client.getId())) {
                 if (runtime != null) BeanUtils.copyProperties(runtime, vo);
@@ -163,11 +177,19 @@ public class ClientServiceImpl extends ServiceImpl<ClientMapper, Client> impleme
         }).toList();
     }
 
+    /**
+     * 返回用于权限配置的客户端简要列表信息。
+     *
+     * @return 客户端简要列表
+     */
     @Override
     public List<ClientSimpleVO> listSimpleClients() {
         return clientIdCache.asMap().values().stream().map(client -> {
-            ClientSimpleVO vo = client.asViewObject(ClientSimpleVO.class);
-            BeanUtils.copyProperties(clientDetailMapper.selectById(vo.getId()), vo);
+            ClientSimpleVO vo = clientStructMapper.toSimpleVO(client);
+            ClientDetail detail = clientDetailMapper.selectById(vo.getId());
+            if (detail != null) {
+                BeanUtils.copyProperties(detail, vo);
+            }
             return vo;
         }).toList();
     }
@@ -178,12 +200,21 @@ public class ClientServiceImpl extends ServiceImpl<ClientMapper, Client> impleme
         this.initClientCache();
     }
 
+    /**
+     * 查询指定客户端详情并补充在线状态。
+     *
+     * @param clientId 客户端ID
+     * @return 客户端详情
+     */
     @Override
     public ClientDetailsVO clientDetails(int clientId) {
         Client cachedClient = clientIdCache.getIfPresent(clientId);
         if (cachedClient == null) return null;
-        ClientDetailsVO client = cachedClient.asViewObject(ClientDetailsVO.class);
-        BeanUtils.copyProperties(clientDetailMapper.selectById(clientId), client);
+        ClientDetailsVO client = clientStructMapper.toDetailsVO(cachedClient);
+        ClientDetail detail = clientDetailMapper.selectById(clientId);
+        if (detail != null) {
+            BeanUtils.copyProperties(detail, client);
+        }
         client.setOnline(this.isOnline(clientId));
         return client;
     }
@@ -195,11 +226,19 @@ public class ClientServiceImpl extends ServiceImpl<ClientMapper, Client> impleme
         this.initClientCache();
     }
 
+    /**
+     * 查询指定客户端历史运行时数据并附加基础硬件信息。
+     *
+     * @param clientId 客户端ID
+     * @return 运行时历史数据
+     */
     @Override
     public RuntimeHistoryVO clientRuntimeDetailsHistory(int clientId) {
         RuntimeHistoryVO vo = influx.readRuntimeHistory(clientId);
         ClientDetail detail = clientDetailMapper.selectById(clientId);
-        BeanUtils.copyProperties(detail, vo);
+        if (detail != null) {
+            BeanUtils.copyProperties(detail, vo);
+        }
         return vo;
     }
 
@@ -217,18 +256,30 @@ public class ClientServiceImpl extends ServiceImpl<ClientMapper, Client> impleme
         heartbeatMap.remove(clientId);
     }
 
+    /**
+     * 保存客户端SSH连接配置，并在入库前对密码进行加密。
+     *
+     * @param vo SSH连接参数
+     */
     @Override
     public void saveSshConnection(SshConnectVO vo) {
         Client client = clientIdCache.getIfPresent(vo.getId());
         if (client == null) return;
         ClientSsh clientSsh = new ClientSsh();
         BeanUtils.copyProperties(vo, clientSsh);
+        clientSsh.setPassword(cryptoUtils.encrypt(vo.getPassword()));
         if (Objects.nonNull(clientSshMapper.selectById(client.getId())))
             clientSshMapper.updateById(clientSsh);
         else
             clientSshMapper.insert(clientSsh);
     }
 
+    /**
+     * 读取客户端SSH连接配置，并在返回前将密码解密为前端可回显内容。
+     *
+     * @param clientId 客户端ID
+     * @return SSH配置
+     */
     @Override
     public SshSettingsVO getSshSetting(int clientId) {
         ClientSsh clientSsh = clientSshMapper.selectById(clientId);
@@ -236,9 +287,59 @@ public class ClientServiceImpl extends ServiceImpl<ClientMapper, Client> impleme
         if (clientSsh == null) {
             ClientDetail detail = clientDetailMapper.selectById(clientId);
             vo = new SshSettingsVO();
-            vo.setIp(detail.getIp());
-        } else vo = clientSsh.asViewObject(SshSettingsVO.class);
+            if (detail != null) {
+                vo.setIp(detail.getIp());
+            }
+        } else {
+            vo = clientStructMapper.toSshSettingsVO(clientSsh);
+            vo.setPassword(cryptoUtils.decrypt(clientSsh.getPassword()));
+        }
         return vo;
+    }
+
+    /**
+     * 查询需要执行主动健康探测的客户端集合。
+     *
+     * @param staleThresholdMs 心跳/运行时数据过期阈值
+     * @return 需要探测的客户端列表
+     */
+    @Override
+    public List<Client> listHealthCheckCandidates(long staleThresholdMs) {
+        long now = System.currentTimeMillis();
+        return clientIdCache.asMap().values().stream()
+                .filter(client -> {
+                    Long lastHeartbeat = heartbeatMap.get(client.getId());
+                    if (lastHeartbeat != null && now - lastHeartbeat <= staleThresholdMs) {
+                        return false;
+                    }
+                    RuntimeDetailVO runtime = currentRuntime.getIfPresent(client.getId());
+                    return runtime == null || now - runtime.getTimestamp() > staleThresholdMs;
+                })
+                .toList();
+    }
+
+    /**
+     * 查询客户端SSH配置，供主动健康探测使用。
+     *
+     * @param clientId 客户端ID
+     * @return SSH配置，未配置时返回null
+     */
+    @Override
+    public ClientSsh findClientSsh(int clientId) {
+        return clientSshMapper.selectById(clientId);
+    }
+
+    /**
+     * 强制将客户端标记为离线并推送最新列表。
+     *
+     * @param clientId 客户端ID
+     */
+    @Override
+    public void forceClientOffline(int clientId) {
+        heartbeatMap.remove(clientId);
+        currentRuntime.invalidate(clientId);
+        sseController.pushClientList();
+        log.warn("客户端 {} 在主动健康检查后被标记为离线", clientId);
     }
 
     private boolean isOnline(int clientId) {

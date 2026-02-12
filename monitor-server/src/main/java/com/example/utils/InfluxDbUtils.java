@@ -23,7 +23,7 @@ import java.util.List;
 
 @Slf4j
 @Component
-public class influxDBUtils {
+public class InfluxDbUtils {
     @Value("${spring.influx.url}")
     String url;
     @Value("${spring.influx.user}")

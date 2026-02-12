@@ -48,6 +48,10 @@ spring:
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
       password: ${REDIS_PASSWORD}
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: true
   security:
     jwt:
       key: ${JWT_KEY}
@@ -69,6 +73,16 @@ spring:
       origin: '*'
       credentials: false
       methods: '*'
+security:
+  ssh:
+    encrypt-key: ${SSH_ENCRYPT_KEY}
+monitor:
+  health-check:
+    enabled: ${MONITOR_HEALTH_CHECK_ENABLED:true}
+    interval: ${MONITOR_HEALTH_CHECK_INTERVAL:30000}
+    stale-threshold-ms: ${MONITOR_HEALTH_CHECK_STALE_THRESHOLD_MS:60000}
+    connect-timeout-ms: ${MONITOR_HEALTH_CHECK_CONNECT_TIMEOUT_MS:3000}
+    failure-threshold: ${MONITOR_HEALTH_CHECK_FAILURE_THRESHOLD:3}
 management:
   endpoints:
     web:
