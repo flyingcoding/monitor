@@ -88,6 +88,14 @@ function getToken() {
 
 // SSE 订阅替代轮询
 let runtimeEventSource = null
+let runtimeRetryDelay = 1000
+const RUNTIME_SSE_MAX_DELAY = 60000
+
+/**
+ * 建立指定主机运行时SSE连接，并在断开时按指数退避策略重连。
+ *
+ * @param {number} clientId 主机ID
+ */
 function connectRuntimeSSE(clientId) {
   if (runtimeEventSource) {
     runtimeEventSource.close()
@@ -102,13 +110,14 @@ function connectRuntimeSSE(clientId) {
     const data = JSON.parse(event.data)
     if (details.runtime.list.length >= 360) details.runtime.list.splice(0, 1)
     details.runtime.list.push(data)
+    runtimeRetryDelay = 1000
   })
   runtimeEventSource.onerror = () => {
     if (runtimeEventSource) runtimeEventSource.close()
-    // 降级为轮询
     setTimeout(() => {
       if (props.id !== -1) connectRuntimeSSE(props.id)
-    }, 10000)
+    }, runtimeRetryDelay)
+    runtimeRetryDelay = Math.min(runtimeRetryDelay * 2, RUNTIME_SSE_MAX_DELAY)
   }
 }
 

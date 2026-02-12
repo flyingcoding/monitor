@@ -32,6 +32,12 @@ function getToken() {
 
 // SSE 订阅替代轮询
 let eventSource = null
+let sseRetryDelay = 1000
+const SSE_MAX_DELAY = 60000
+
+/**
+ * 建立主机列表SSE连接，并在断开时按指数退避策略重连。
+ */
 function connectSSE() {
   const token = getToken()
   if (!token) return
@@ -39,13 +45,14 @@ function connectSSE() {
   eventSource = new EventSource(`${baseUrl}/api/sse/clients?token=${token}`)
   eventSource.addEventListener('clients', (event) => {
     list.value = JSON.parse(event.data)
+    sseRetryDelay = 1000
   })
   eventSource.onerror = () => {
     if (eventSource) eventSource.close()
-    // 降级为轮询
     setTimeout(() => {
       if (route.name === 'manage') connectSSE()
-    }, 10000)
+    }, sseRetryDelay)
+    sseRetryDelay = Math.min(sseRetryDelay * 2, SSE_MAX_DELAY)
   }
 }
 
