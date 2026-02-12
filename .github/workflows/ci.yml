@@ -1,0 +1,88 @@
+name: CI
+
+on:
+  push:
+    branches: [main, main-v2]
+  pull_request:
+    branches: [main, main-v2]
+
+jobs:
+  server:
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: test
+          MYSQL_DATABASE: monitor
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h localhost -ptest"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+      rabbitmq:
+        image: rabbitmq:3-management-alpine
+        ports:
+          - 5672:5672
+      influxdb:
+        image: influxdb:2.7
+        env:
+          DOCKER_INFLUXDB_INIT_MODE: setup
+          DOCKER_INFLUXDB_INIT_USERNAME: admin
+          DOCKER_INFLUXDB_INIT_PASSWORD: admin123456
+          DOCKER_INFLUXDB_INIT_ORG: monitor
+          DOCKER_INFLUXDB_INIT_BUCKET: monitor
+        ports:
+          - 8086:8086
+    env:
+      MYSQL_URL: jdbc:mysql://localhost:3306/monitor?useSSL=false&allowPublicKeyRetrieval=true
+      MYSQL_USER: root
+      MYSQL_PASSWORD: test
+      REDIS_HOST: localhost
+      REDIS_PASSWORD: ''
+      RABBITMQ_HOST: localhost
+      RABBITMQ_USER: guest
+      RABBITMQ_PASSWORD: guest
+      INFLUX_URL: http://localhost:8086
+      INFLUX_USER: admin
+      INFLUX_PASSWORD: admin123456
+      INFLUX_ORG: monitor
+      INFLUX_BUCKET: monitor
+      JWT_KEY: test-jwt-key
+      SSH_ENCRYPT_KEY: MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
+      MAIL_USERNAME: test@example.com
+      MAIL_PASSWORD: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: 'maven'
+      - name: Verify monitor-server
+        run: cd monitor-server && mvn verify -Pdev
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+          cache-dependency-path: monitor-web/pnpm-lock.yaml
+      - name: Install dependencies
+        run: cd monitor-web && pnpm install --frozen-lockfile
+      - name: Lint and build
+        run: cd monitor-web && pnpm run check
+      - name: Run tests
+        run: cd monitor-web && pnpm run test -- --run
