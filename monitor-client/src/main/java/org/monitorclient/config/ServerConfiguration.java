@@ -6,6 +6,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.monitorclient.entity.ConnectionConfig;
 import org.monitorclient.utils.MonitorUtils;
 import org.monitorclient.utils.NetUtils;
+import org.monitorclient.utils.RetryUtils;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.context.annotation.Bean;
@@ -49,21 +50,39 @@ public class ServerConfiguration implements ApplicationRunner {
         return config;
     }
 
+    /**
+     * 从环境变量读取并校验服务端配置，注册流程失败时执行指数退避重试。
+     *
+     * @return 可用连接配置，失败返回null
+     */
     private ConnectionConfig readFromEnv() {
         String server = System.getenv("MONITOR_SERVER");
         String token = System.getenv("MONITOR_TOKEN");
         if (server != null && token != null && !server.isEmpty() && !token.isEmpty()) {
             log.info("从环境变量读取到服务端配置");
             ConnectionConfig config = new ConnectionConfig(server, token);
-            if (net.registerToServer(server, token)) {
+            try {
+                RetryUtils.retryWithBackoff(() -> {
+                    if (!net.registerToServer(server, token)) {
+                        throw new RuntimeException("服务端注册失败");
+                    }
+                    return true;
+                }, "环境变量注册");
                 this.saveConfigurationToFile(config);
                 return config;
+            } catch (Exception e) {
+                log.warn("环境变量中的服务端配置重试后仍注册失败");
             }
-            log.warn("环境变量中的服务端配置注册失败，尝试其他配置方式");
         }
         return null;
     }
 
+    /**
+     * 从命令行参数读取并校验服务端配置，注册流程失败时执行指数退避重试。
+     *
+     * @param args 启动参数
+     * @return 可用连接配置，失败返回null
+     */
     private ConnectionConfig readFromArgs(ApplicationArguments args) {
         List<String> serverArgs = args.getOptionValues("server");
         List<String> tokenArgs = args.getOptionValues("token");
@@ -72,11 +91,18 @@ public class ServerConfiguration implements ApplicationRunner {
             String token = tokenArgs.get(0);
             log.info("从命令行参数读取到服务端配置");
             ConnectionConfig config = new ConnectionConfig(server, token);
-            if (net.registerToServer(server, token)) {
+            try {
+                RetryUtils.retryWithBackoff(() -> {
+                    if (!net.registerToServer(server, token)) {
+                        throw new RuntimeException("服务端注册失败");
+                    }
+                    return true;
+                }, "命令行参数注册");
                 this.saveConfigurationToFile(config);
                 return config;
+            } catch (Exception e) {
+                log.warn("命令行参数中的服务端配置重试后仍注册失败");
             }
-            log.warn("命令行参数中的服务端配置注册失败，尝试其他配置方式");
         }
         return null;
     }

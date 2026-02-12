@@ -46,12 +46,25 @@ public class NetUtils {
         }
     }
 
+    /**
+     * 发送心跳包并执行快速重试，降低瞬时网络抖动带来的误判。
+     */
     public void sendHeartbeat() {
-        Response response = this.doGet("/heartbeat");
-        if (response.success()) {
-            log.debug("心跳发送成功");
-        } else {
-            log.warn("心跳发送失败：{}", response.message());
+        for (int i = 0; i < 3; i++) {
+            Response response = this.doGet("/heartbeat");
+            if (response.success()) {
+                log.debug("心跳发送成功");
+                return;
+            }
+            log.warn("心跳发送失败（第{}次）：{}", i + 1, response.message());
+            if (i < 2) {
+                try {
+                    Thread.sleep(1000);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+            }
         }
     }
 
