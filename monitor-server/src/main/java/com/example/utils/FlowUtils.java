@@ -3,8 +3,10 @@ package com.example.utils;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.stereotype.Component;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 
@@ -18,6 +20,21 @@ public class FlowUtils {
 
     @Resource
     StringRedisTemplate template;
+
+    /**
+     * Redis Lua脚本：同一IP在一个周期内累加计数，超过阈值后写入封禁键，确保原子限流。
+     */
+    private static final String RATE_LIMIT_SCRIPT = """
+            local counter = redis.call('INCR', KEYS[1])
+            if counter == 1 then
+                redis.call('EXPIRE', KEYS[1], tonumber(ARGV[1]))
+            end
+            if counter > tonumber(ARGV[2]) then
+                redis.call('SET', KEYS[2], '', 'EX', tonumber(ARGV[3]))
+                return 0
+            end
+            return 1
+            """;
 
     /**
      * 针对于单次频率限制，请求成功后，在冷却时间内不得再次进行请求，如3秒内不能再次发起请求
@@ -56,11 +73,12 @@ public class FlowUtils {
      * @return 是否通过限流检查
      */
     public boolean limitPeriodCheck(String counterKey, String blockKey, int blockTime, int frequency, int period){
-        return this.internalCheck(counterKey, frequency, period, (overclock) -> {
-                    if (overclock)
-                        template.opsForValue().set(blockKey, "", blockTime, TimeUnit.SECONDS);
-                    return !overclock;
-                });
+        Long result = template.execute(
+                new DefaultRedisScript<>(RATE_LIMIT_SCRIPT, Long.class),
+                List.of(counterKey, blockKey),
+                String.valueOf(period), String.valueOf(frequency), String.valueOf(blockTime)
+        );
+        return result != null && result == 1L;
     }
 
     /**

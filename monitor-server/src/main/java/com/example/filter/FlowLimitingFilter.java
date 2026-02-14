@@ -57,13 +57,11 @@ public class FlowLimitingFilter extends HttpFilter {
      * @return 是否操作成功
      */
     private boolean tryCount(String address) {
-        synchronized (address.intern()) {
-            if(template.hasKey(Const.FLOW_LIMIT_BLOCK + address))
-                return false;
-            String counterKey = Const.FLOW_LIMIT_COUNTER + address;
-            String blockKey = Const.FLOW_LIMIT_BLOCK + address;
-            return utils.limitPeriodCheck(counterKey, blockKey, block, limit, period);
-        }
+        if (Boolean.TRUE.equals(template.hasKey(Const.FLOW_LIMIT_BLOCK + address)))
+            return false;
+        String counterKey = Const.FLOW_LIMIT_COUNTER + address;
+        String blockKey = Const.FLOW_LIMIT_BLOCK + address;
+        return utils.limitPeriodCheck(counterKey, blockKey, block, limit, period);
     }
 
     /**

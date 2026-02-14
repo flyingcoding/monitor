@@ -83,6 +83,21 @@ monitor:
     stale-threshold-ms: ${MONITOR_HEALTH_CHECK_STALE_THRESHOLD_MS:60000}
     connect-timeout-ms: ${MONITOR_HEALTH_CHECK_CONNECT_TIMEOUT_MS:3000}
     failure-threshold: ${MONITOR_HEALTH_CHECK_FAILURE_THRESHOLD:3}
+  influx-buffer:
+    dir: ${MONITOR_INFLUX_BUFFER_DIR:data/influx-buffer}
+    replay-interval-ms: ${MONITOR_INFLUX_BUFFER_REPLAY_INTERVAL_MS:15000}
+    batch-size: ${MONITOR_INFLUX_BUFFER_BATCH_SIZE:200}
+resilience4j:
+  circuitbreaker:
+    instances:
+      influxdb:
+        sliding-window-type: COUNT_BASED
+        sliding-window-size: 10
+        minimum-number-of-calls: 5
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 30s
+        permitted-number-of-calls-in-half-open-state: 3
+        automatic-transition-from-open-to-half-open-enabled: true
 management:
   endpoints:
     web:

@@ -1,6 +1,11 @@
+server:
+  shutdown: graceful
+
 spring:
   profiles:
     active: '@environment@'
+  lifecycle:
+    timeout-per-shutdown-phase: 30s
 
 # springdoc-openapi项目配置
 springdoc:

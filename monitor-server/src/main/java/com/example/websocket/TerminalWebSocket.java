@@ -3,21 +3,28 @@ package com.example.websocket;
 import com.example.entity.dto.ClientSsh;
 import com.example.mapper.ClientSshMapper;
 import com.example.utils.CryptoUtils;
-import com.jcraft.jsch.ChannelShell;
-import com.jcraft.jsch.JSch;
-import com.jcraft.jsch.JSchException;
 import jakarta.annotation.Resource;
-import jakarta.websocket.*;
+import jakarta.websocket.CloseReason;
+import jakarta.websocket.OnClose;
+import jakarta.websocket.OnError;
+import jakarta.websocket.OnMessage;
+import jakarta.websocket.OnOpen;
+import jakarta.websocket.Session;
 import jakarta.websocket.server.PathParam;
 import jakarta.websocket.server.ServerEndpoint;
 import lombok.extern.slf4j.Slf4j;
+import net.schmizz.sshj.SSHClient;
+import net.schmizz.sshj.transport.verification.PromiscuousVerifier;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
+import java.net.ConnectException;
+import java.net.SocketTimeoutException;
 import java.nio.charset.StandardCharsets;
+import java.util.Collections;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
@@ -28,11 +35,14 @@ import java.util.concurrent.Executors;
 @ServerEndpoint("/terminal/{clientId}")
 public class TerminalWebSocket {
 
+    private static final int SSH_CONNECT_TIMEOUT_MS = 10_000;
+    private static final int SSH_IO_TIMEOUT_MS = 10_000;
+
     private static ClientSshMapper sshMapper;
     private static CryptoUtils cryptoUtils;
 
     /**
-     * 注入SSH配置Mapper，供WebSocket端点静态访问。
+     * 注入 SSH 配置 Mapper，供 WebSocket 端点静态访问。
      *
      * @param sshMapper SSH配置Mapper
      */
@@ -42,7 +52,7 @@ public class TerminalWebSocket {
     }
 
     /**
-     * 注入密码加解密工具，供WebSocket端点静态访问。
+     * 注入密码加解密工具，供 WebSocket 端点静态访问。
      *
      * @param cryptoUtils 密码加解密工具
      */
@@ -51,193 +61,232 @@ public class TerminalWebSocket {
         TerminalWebSocket.cryptoUtils = cryptoUtils;
     }
 
-    private static final Map<Session, Shell> sessionMap = new ConcurrentHashMap<>();
-    private final ExecutorService service = Executors.newSingleThreadExecutor();
+    private static final Map<Session, ShellConnection> sessionMap = new ConcurrentHashMap<>();
 
+    /**
+     * 建立 WebSocket 后创建 SSH 连接。
+     *
+     * @param session WebSocket会话
+     * @param clientId 客户端ID
+     * @throws Exception 连接异常
+     */
     @OnOpen
-    public void onOpen(Session session,
-                       @PathParam(value = "clientId") String clientId) throws Exception {
-        log.info("正在尝试建立WebSocket终端连接，客户端ID: {}, 会话ID: {}", clientId, session.getId());
-        try {
-            ClientSsh ssh = sshMapper.selectById(clientId);
-            if(ssh == null) {
-                log.error("找不到客户端ID为 {} 的SSH配置信息", clientId);
-                session.close(new CloseReason(CloseReason.CloseCodes.CANNOT_ACCEPT, "无法识别此主机"));
-                return;
-            }
-            log.info("已找到客户端SSH配置信息：IP={}, 端口={}, 用户名={}", ssh.getIp(), ssh.getPort(), ssh.getUsername());
-            if(this.createSshConnection(session, ssh, ssh.getIp())) {
-                log.info("主机 {} 的SSH连接已创建", ssh.getIp());
-            } else {
-                log.error("与主机 {} 的SSH连接创建失败", ssh.getIp());
-            }
-        } catch (Exception e) {
-            log.error("WebSocket连接建立过程中发生异常", e);
-            throw e;
+    public void onOpen(Session session, @PathParam("clientId") String clientId) throws Exception {
+        log.info("正在尝试建立 WebSocket 终端连接，客户端ID: {}, 会话ID: {}", clientId, session.getId());
+        ClientSsh ssh = sshMapper.selectById(clientId);
+        if (ssh == null) {
+            session.close(new CloseReason(CloseReason.CloseCodes.CANNOT_ACCEPT, "无法识别此主机"));
+            return;
         }
+        this.createSshConnection(session, ssh, ssh.getIp());
     }
 
+    /**
+     * 将前端输入透传到 SSH Shell。
+     *
+     * @param session WebSocket会话
+     * @param message 输入内容
+     * @throws IOException IO异常
+     */
     @OnMessage
     public void onMessage(Session session, String message) throws IOException {
-        Shell shell = sessionMap.get(session);
+        ShellConnection shell = sessionMap.get(session);
+        if (shell == null) {
+            return;
+        }
         OutputStream output = shell.output;
         output.write(message.getBytes(StandardCharsets.UTF_8));
         output.flush();
     }
 
+    /**
+     * WebSocket 关闭时释放 SSH 会话资源。
+     *
+     * @param session WebSocket会话
+     * @throws IOException IO异常
+     */
     @OnClose
     public void onClose(Session session) throws IOException {
-        Shell shell = sessionMap.get(session);
-        if(shell != null) {
+        ShellConnection shell = sessionMap.remove(session);
+        if (shell != null) {
             shell.close();
-            sessionMap.remove(session);
-            log.info("主机 {} 的SSH连接已断开", shell.js.getHost());
+            log.info("主机 {} 的 SSH 连接已断开", shell.targetHost);
         }
     }
 
+    /**
+     * WebSocket 异常时关闭会话。
+     *
+     * @param session WebSocket会话
+     * @param error 异常信息
+     * @throws IOException IO异常
+     */
     @OnError
     public void onError(Session session, Throwable error) throws IOException {
-        log.error("用户WebSocket连接出现错误", error);
+        log.error("用户 WebSocket 连接出现错误", error);
         session.close();
     }
 
     /**
-     * 建立到目标主机的SSH连接并绑定到当前WebSocket会话。
+     * 创建 SSH 连接并绑定到当前 WebSocket 会话。
      *
-     * @param session WebSocket会话
+     * @param wsSession WebSocket会话
      * @param ssh SSH配置
      * @param ip 目标IP
-     * @return 是否创建成功
-     * @throws IOException 关闭会话时可能抛出的异常
+     * @throws IOException 连接或关闭异常
      */
-    private boolean createSshConnection(Session session, ClientSsh ssh, String ip) throws IOException{
-        log.info("开始尝试SSH连接，用户: {}，IP: {}，端口: {}", ssh.getUsername(), ip, ssh.getPort());
+    private void createSshConnection(Session wsSession, ClientSsh ssh, String ip) throws IOException {
+        SSHClient client = new SSHClient();
+        // 宽松主机校验策略，保持与历史行为兼容。
+        client.addHostKeyVerifier(new PromiscuousVerifier());
+        client.setConnectTimeout(SSH_CONNECT_TIMEOUT_MS);
+        client.setTimeout(SSH_IO_TIMEOUT_MS);
         try {
-            JSch jSch = new JSch();
-            log.info("已创建JSch实例");
-            com.jcraft.jsch.Session js = jSch.getSession(ssh.getUsername(), ip, ssh.getPort());
-            log.info("已获取JSch Session，准备进行连接配置");
+            client.connect(ip, ssh.getPort());
             String password = cryptoUtils == null ? ssh.getPassword() : cryptoUtils.decrypt(ssh.getPassword());
-            js.setPassword(password);
-            js.setConfig("StrictHostKeyChecking", "no");
-            js.setTimeout(10000);
-            log.info("SSH连接参数设置完毕，尝试连接到 {}:{}", ip, ssh.getPort());
-            js.connect();
-            log.info("SSH连接成功，准备打开Shell通道");
-            ChannelShell channel = (ChannelShell) js.openChannel("shell");
-            channel.setPtyType("xterm");
-            log.info("Shell通道已创建，准备连接");
-            channel.connect(1000);
-            log.info("Shell通道连接成功");
-            sessionMap.put(session, new Shell(session, js, channel));
-            return true;
-        } catch (JSchException e) {
-            String message = e.getMessage();
-            log.error("SSH连接异常：{}", message, e);
-            log.error("连接详情 - 主机: {}, 端口: {}, 用户名: {}", ip, ssh.getPort(), ssh.getUsername());
-            if(message.equals("Auth fail")) {
-                session.close(new CloseReason(CloseReason.CloseCodes.CANNOT_ACCEPT,
-                        "登录SSH失败，用户名或密码错误"));
-                log.error("连接SSH失败，用户名或密码错误，登录失败");
-            } else if(message.contains("Connection refused")) {
-                session.close(new CloseReason(CloseReason.CloseCodes.CANNOT_ACCEPT,
-                        "连接被拒绝，可能是没有启动SSH服务或是放开端口"));
-                log.error("连接SSH失败，连接被拒绝，可能是没有启动SSH服务或是放开端口");
-            } else if(message.contains("connect timed out")) {
-                session.close(new CloseReason(CloseReason.CloseCodes.CANNOT_ACCEPT,
-                        "连接超时，请检查网络或防火墙设置"));
-                log.error("连接SSH失败，连接超时，可能是网络问题或防火墙阻止了连接");
-            } else if(message.contains("UnknownHostException") || message.contains("No such host is known")) {
-                session.close(new CloseReason(CloseReason.CloseCodes.CANNOT_ACCEPT,
-                        "无法解析主机地址，请检查IP是否正确"));
-                log.error("连接SSH失败，无法解析主机地址 {}", ip);
-            } else {
-                session.close(new CloseReason(CloseReason.CloseCodes.CANNOT_ACCEPT, message));
-                log.error("连接SSH时出现未知错误: {}", e.getMessage());
-            }
+            client.authPassword(ssh.getUsername(), password);
 
-            // 尝试执行网络诊断
-            try {
-                log.info("正在执行网络诊断，检查与目标主机的连接...");
+            net.schmizz.sshj.connection.channel.direct.Session sshSession = client.startSession();
+            sshSession.allocatePTY("xterm", 80, 24, 0, 0, Collections.emptyMap());
+            net.schmizz.sshj.connection.channel.direct.Session.Shell shell = sshSession.startShell();
 
-                // 记录服务器信息
-                String serverInfo = String.format("服务器信息 - 主机名: %s, IP: %s",
-                        java.net.InetAddress.getLocalHost().getHostName(),
-                        java.net.InetAddress.getLocalHost().getHostAddress());
-                log.info(serverInfo);
-
-                // 尝试执行ping测试
-                boolean reachable = false;
-                try {
-                    log.info("正在尝试ping目标主机 {} ...", ip);
-                    reachable = java.net.InetAddress.getByName(ip).isReachable(3000);
-                    log.info("目标主机 {} 可达性: {}", ip, reachable);
-                } catch (Exception pingEx) {
-                    log.error("无法执行ping测试: {}", pingEx.getMessage(), pingEx);
-                }
-
-                // 尝试获取目标主机信息
-                try {
-                    java.net.InetAddress addr = java.net.InetAddress.getByName(ip);
-                    log.info("目标主机解析信息 - 主机名: {}, 规范主机名: {}, IP地址: {}",
-                            addr.getHostName(), addr.getCanonicalHostName(), addr.getHostAddress());
-                } catch (Exception resolveEx) {
-                    log.error("无法解析目标主机信息: {}", resolveEx.getMessage());
-                }
-
-                // 尝试使用Socket直接连接SSH端口
-                try {
-                    log.info("尝试直接通过Socket连接 {}:{} ...", ip, ssh.getPort());
-                    java.net.Socket socket = new java.net.Socket();
-                    socket.connect(new java.net.InetSocketAddress(ip, ssh.getPort()), 5000);
-                    log.info("Socket连接成功，端口 {} 开放", ssh.getPort());
-                    socket.close();
-                } catch (Exception socketEx) {
-                    log.error("Socket连接失败: {}", socketEx.getMessage());
-                }
-            } catch (Exception diagEx) {
-                log.error("执行网络诊断时出错", diagEx);
-            }
+            sessionMap.put(wsSession, new ShellConnection(wsSession, ip, client, sshSession, shell));
+            log.info("主机 {} 的 SSH 连接已创建", ip);
+        } catch (Exception e) {
+            log.error("建立 SSH 连接失败，host={}, port={}, user={}", ip, ssh.getPort(), ssh.getUsername(), e);
+            this.closeClientQuietly(client);
+            String reason = this.resolveErrorMessage(e);
+            wsSession.close(new CloseReason(CloseReason.CloseCodes.CANNOT_ACCEPT, reason));
         }
-        return false;
     }
 
-    private class Shell {
-        private final Session session;
-        private final com.jcraft.jsch.Session js;
-        private final ChannelShell channel;
+    /**
+     * 根据异常类型解析更友好的错误提示。
+     *
+     * @param throwable 异常
+     * @return 错误消息
+     */
+    private String resolveErrorMessage(Throwable throwable) {
+        String message = throwable.getMessage();
+        if (message == null) {
+            return "连接 SSH 失败";
+        }
+        if (throwable instanceof net.schmizz.sshj.userauth.UserAuthException || message.contains("Auth fail")) {
+            return "登录 SSH 失败，用户名或密码错误";
+        }
+        if (throwable instanceof ConnectException || message.contains("Connection refused")) {
+            return "连接被拒绝，可能未开启 SSH 服务或端口未放通";
+        }
+        if (throwable instanceof SocketTimeoutException || message.contains("timed out")) {
+            return "连接超时，请检查网络或防火墙设置";
+        }
+        if (message.contains("UnknownHostException") || message.contains("No such host")) {
+            return "无法解析主机地址，请检查 IP 是否正确";
+        }
+        return message;
+    }
+
+    /**
+     * 安静关闭 SSHClient。
+     *
+     * @param client SSHClient
+     */
+    private void closeClientQuietly(SSHClient client) {
+        try {
+            client.disconnect();
+            client.close();
+        } catch (Exception ignored) {
+        }
+    }
+
+    /**
+     * 终端会话包装，管理 SSH shell 的读写和生命周期。
+     */
+    private static class ShellConnection {
+        private final Session wsSession;
+        private final String targetHost;
+        private final SSHClient client;
+        private final net.schmizz.sshj.connection.channel.direct.Session sshSession;
+        private final net.schmizz.sshj.connection.channel.direct.Session.Shell shell;
         private final InputStream input;
         private final OutputStream output;
+        private final ExecutorService readerExecutor;
 
-        public Shell(Session session, com.jcraft.jsch.Session js, ChannelShell channel) throws IOException {
-            this.js = js;
-            this.session = session;
-            this.channel = channel;
-            this.input = channel.getInputStream();
-            this.output = channel.getOutputStream();
-            service.submit(this::read);
+        /**
+         * 构建终端连接并启动读取循环。
+         *
+         * @param wsSession WebSocket会话
+         * @param targetHost 目标主机
+         * @param client SSH客户端
+         * @param sshSession SSH会话
+         * @param shell shell通道
+         * @throws IOException IO异常
+         */
+        private ShellConnection(Session wsSession,
+                                String targetHost,
+                                SSHClient client,
+                                net.schmizz.sshj.connection.channel.direct.Session sshSession,
+                                net.schmizz.sshj.connection.channel.direct.Session.Shell shell) throws IOException {
+            this.wsSession = wsSession;
+            this.targetHost = targetHost;
+            this.client = client;
+            this.sshSession = sshSession;
+            this.shell = shell;
+            this.input = shell.getInputStream();
+            this.output = shell.getOutputStream();
+            this.readerExecutor = Executors.newSingleThreadExecutor(r -> {
+                Thread thread = new Thread(r, "ssh-shell-reader-" + wsSession.getId());
+                thread.setDaemon(true);
+                return thread;
+            });
+            this.readerExecutor.submit(this::read);
         }
 
+        /**
+         * 持续读取 SSH 输出并推送到 WebSocket 客户端。
+         */
         private void read() {
             try {
                 InputStreamReader reader = new InputStreamReader(input, StandardCharsets.UTF_8);
                 char[] buffer = new char[8 * 1024];
                 int i;
                 while ((i = reader.read(buffer)) != -1) {
-                    String text = new String(buffer, 0, i);
-                    session.getBasicRemote().sendText(text);
+                    if (!wsSession.isOpen()) {
+                        break;
+                    }
+                    wsSession.getBasicRemote().sendText(new String(buffer, 0, i));
                 }
             } catch (Exception e) {
-                log.error("读取SSH输入流时出现问题", e);
+                log.error("读取 SSH 输入流时出现问题", e);
             }
         }
 
-        public void close() throws IOException {
-            input.close();
-            output.close();
-            channel.disconnect();
-            js.disconnect();
-            service.shutdown();
+        /**
+         * 关闭当前连接占用的所有资源。
+         */
+        private void close() {
+            try {
+                input.close();
+            } catch (Exception ignored) {
+            }
+            try {
+                output.close();
+            } catch (Exception ignored) {
+            }
+            try {
+                shell.close();
+            } catch (Exception ignored) {
+            }
+            try {
+                sshSession.close();
+            } catch (Exception ignored) {
+            }
+            try {
+                client.disconnect();
+                client.close();
+            } catch (Exception ignored) {
+            }
+            readerExecutor.shutdownNow();
         }
     }
 }

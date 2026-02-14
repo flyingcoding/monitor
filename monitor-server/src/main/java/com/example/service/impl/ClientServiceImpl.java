@@ -12,7 +12,7 @@ import com.example.mapper.ClientMapper;
 import com.example.mapper.ClientSshMapper;
 import com.example.mapper.struct.ClientStructMapper;
 import com.example.service.ClientService;
-import com.example.controller.SseController;
+import com.example.config.SseEventBus;
 import com.example.utils.CryptoUtils;
 import com.example.utils.InfluxDbUtils;
 import com.github.benmanes.caffeine.cache.Cache;
@@ -52,7 +52,7 @@ public class ClientServiceImpl extends ServiceImpl<ClientMapper, Client> impleme
 
     @Lazy
     @Resource
-    private SseController sseController;
+    private SseEventBus sseEventBus;
 
     @Resource
     private ClientDetailMapper clientDetailMapper;
@@ -93,7 +93,7 @@ public class ClientServiceImpl extends ServiceImpl<ClientMapper, Client> impleme
     @Override
     public void updateHeartbeat(Client client) {
         heartbeatMap.put(client.getId(), System.currentTimeMillis());
-        sseController.pushClientList();
+        sseEventBus.publishClientList();
     }
 
     /**
@@ -105,7 +105,7 @@ public class ClientServiceImpl extends ServiceImpl<ClientMapper, Client> impleme
     public void clientOffline(Client client) {
         heartbeatMap.remove(client.getId());
         currentRuntime.invalidate(client.getId());
-        sseController.pushClientList();
+        sseEventBus.publishClientList();
         log.info("客户端 {} 已主动下线", client.getId());
     }
 
@@ -151,8 +151,8 @@ public class ClientServiceImpl extends ServiceImpl<ClientMapper, Client> impleme
         currentRuntime.put(client.getId(), vo);
         heartbeatMap.put(client.getId(), System.currentTimeMillis());
         influx.writeRuntimeData(client.getId(), vo);
-        sseController.pushRuntime(client.getId(), vo);
-        sseController.pushClientList();
+        sseEventBus.publishRuntime(client.getId(), vo);
+        sseEventBus.publishClientList();
     }
 
     /**
@@ -338,7 +338,7 @@ public class ClientServiceImpl extends ServiceImpl<ClientMapper, Client> impleme
     public void forceClientOffline(int clientId) {
         heartbeatMap.remove(clientId);
         currentRuntime.invalidate(clientId);
-        sseController.pushClientList();
+        sseEventBus.publishClientList();
         log.warn("客户端 {} 在主动健康检查后被标记为离线", clientId);
     }
 
