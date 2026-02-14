@@ -3,7 +3,6 @@ package org.monitorclient.utils;
 import lombok.extern.slf4j.Slf4j;
 import org.monitorclient.entity.BaseDetail;
 import org.monitorclient.entity.RuntimeDetail;
-import org.springframework.stereotype.Component;
 import oshi.SystemInfo;
 import oshi.hardware.CentralProcessor;
 import oshi.hardware.HardwareAbstractionLayer;
@@ -24,7 +23,6 @@ import java.util.Properties;
  * @create: 2024-07-14 22:32
  */
 @Slf4j
-@Component
 public class MonitorUtils {
     private final double GB_TO_BYTES = 1024 * 1024 * 1024.0;
     private final double MB_TO_BYTES = 1024 * 1024.0;

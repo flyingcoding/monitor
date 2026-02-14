@@ -10,7 +10,7 @@ set -euo pipefail
 INSTALL_DIR="/opt/monitor-client"
 SERVICE_NAME="monitor-client"
 JAR_NAME="monitor-client.jar"
-JAVA_MIN_VERSION="17"
+JAVA_MIN_VERSION="21"
 LAUNCHD_LABEL="com.monitor.client"
 PLIST_PATH="$HOME/Library/LaunchAgents/${LAUNCHD_LABEL}.plist"
 
@@ -65,16 +65,16 @@ detect_os() {
 java_install_command() {
     local os="$1"
     if [ "$os" = "macos" ]; then
-        echo "brew install openjdk@17"
+        echo "brew install openjdk@21"
         return
     fi
 
     if command -v apt-get >/dev/null 2>&1; then
-        echo "apt-get update && apt-get install -y openjdk-17-jre-headless"
+        echo "apt-get update && apt-get install -y openjdk-21-jre-headless"
     elif command -v dnf >/dev/null 2>&1; then
-        echo "dnf install -y java-17-openjdk-headless"
+        echo "dnf install -y java-21-openjdk-headless"
     elif command -v yum >/dev/null 2>&1; then
-        echo "yum install -y java-17-openjdk-headless"
+        echo "yum install -y java-21-openjdk-headless"
     else
         echo ""
     fi

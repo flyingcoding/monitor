@@ -2,14 +2,11 @@ package org.monitorclient.utils;
 
 import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONObject;
-import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
 import org.monitorclient.entity.BaseDetail;
 import org.monitorclient.entity.ConnectionConfig;
 import org.monitorclient.entity.Response;
 import org.monitorclient.entity.RuntimeDetail;
-import org.springframework.context.annotation.Lazy;
-import org.springframework.stereotype.Component;
 
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -18,30 +15,47 @@ import java.net.http.HttpResponse;
 import java.util.List;
 
 @Slf4j
-@Component
 public class NetUtils {
 
-    @Lazy
-    @Resource
-    ConnectionConfig config;
-
     private final HttpClient client = HttpClient.newHttpClient();
+    private volatile ConnectionConfig config;
 
+    /**
+     * 设置运行期连接配置。
+     *
+     * @param config 连接配置
+     */
+    public void setConfig(ConnectionConfig config) {
+        this.config = config;
+    }
+
+    /**
+     * 使用指定地址和 token 进行客户端注册。
+     *
+     * @param address 服务端地址
+     * @param token 注册 token
+     * @return 是否注册成功
+     */
     public boolean registerToServer(String address, String token) {
-        log.info("正在向服务端注册，请稍等。。。");
+        log.info("正在向服务端注册，请稍等...");
         Response response = this.doGet("/register", address, token);
         if (response.success()) {
-            log.info("客户端注册已完成！");
+            log.info("客户端注册已完成");
         } else {
             log.error("客户端注册失败：{}", response.message());
         }
         return response.success();
     }
 
+    /**
+     * 上报基础静态信息。
+     *
+     * @param detail 基础信息
+     */
     public void updateBaseDetails(BaseDetail detail) {
         Response response = this.doPost("/detail", detail);
         if (response.success()) {
-            log.info("系统基本信息更新完成！");
+            log.info("系统基本信息更新完成");
         } else {
             log.error("系统基本信息更新失败：{}", response.message());
         }
@@ -69,6 +83,9 @@ public class NetUtils {
         }
     }
 
+    /**
+     * 通知服务端当前客户端即将下线。
+     */
     public void notifyShutdown() {
         log.info("正在通知服务端客户端即将下线...");
         Response response = this.doGet("/offline");
@@ -105,11 +122,15 @@ public class NetUtils {
      * 按批次补报本地缓存数据，失败时回滚未发送的同批次数据，避免缓存数据丢失。
      */
     public void flushCachedData() {
-        if (LocalCacheUtils.isEmpty()) return;
+        if (LocalCacheUtils.isEmpty()) {
+            return;
+        }
         log.info("开始补报缓存数据，当前缓存数量：{}", LocalCacheUtils.size());
         while (!LocalCacheUtils.isEmpty()) {
             List<RuntimeDetail> batch = LocalCacheUtils.drainBatch();
-            if (batch.isEmpty()) break;
+            if (batch.isEmpty()) {
+                break;
+            }
             if (!this.sendRuntimeBatch(batch)) {
                 log.warn("批量补报失败，回退单条补报。");
                 int failedIndex = this.sendRuntimeOneByOne(batch);
@@ -173,10 +194,28 @@ public class NetUtils {
         return -1;
     }
 
+    /**
+     * 使用当前配置发起 GET 请求。
+     *
+     * @param url 接口路径
+     * @return 标准响应对象
+     */
     private Response doGet(String url) {
-        return this.doGet(url, config.getAddress(), config.getToken());
+        ConnectionConfig current = this.config;
+        if (current == null) {
+            return Response.errorResponse(new IllegalStateException("未设置连接配置"));
+        }
+        return this.doGet(url, current.getAddress(), current.getToken());
     }
 
+    /**
+     * 发起指定地址和 token 的 GET 请求。
+     *
+     * @param url 接口路径
+     * @param address 服务端地址
+     * @param token 鉴权 token
+     * @return 标准响应对象
+     */
     private Response doGet(String url, String address, String token) {
         try {
             HttpRequest request = HttpRequest.newBuilder().GET()
@@ -191,12 +230,23 @@ public class NetUtils {
         }
     }
 
+    /**
+     * 使用当前配置发起 POST 请求。
+     *
+     * @param url 接口路径
+     * @param data 请求体
+     * @return 标准响应对象
+     */
     private Response doPost(String url, Object data) {
+        ConnectionConfig current = this.config;
+        if (current == null) {
+            return Response.errorResponse(new IllegalStateException("未设置连接配置"));
+        }
         try {
             String rawData = this.serializeRequestBody(data);
             HttpRequest request = HttpRequest.newBuilder().POST(HttpRequest.BodyPublishers.ofString(rawData))
-                    .uri(new URI(config.getAddress() + "/monitor" + url))
-                    .header("Authorization", config.getToken())
+                    .uri(new URI(current.getAddress() + "/monitor" + url))
+                    .header("Authorization", current.getToken())
                     .header("Content-Type", "application/json")
                     .build();
             HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
