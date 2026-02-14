@@ -20,6 +20,9 @@ const defaultFailure = (message, status, url) => {
   ElMessage.warning(message)
 }
 
+/**
+ * 获取并校验当前登录访问令牌。
+ */
 function takeAccessToken() {
   const str = localStorage.getItem(authItemName) || sessionStorage.getItem(authItemName)
   if (!str) return null
@@ -136,4 +139,4 @@ function unauthorized() {
   return !takeAccessToken()
 }
 
-export { post, get, login, logout, unauthorized }
+export { post, get, login, logout, unauthorized, takeAccessToken }

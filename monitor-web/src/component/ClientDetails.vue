@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onBeforeUnmount, reactive, watch } from 'vue'
+import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { get, post } from '@/net'
 import {
   copyIp,
@@ -34,6 +34,8 @@ const details = reactive({
   },
   editNode: false
 })
+const baseLoading = ref(true)
+const runtimeLoading = ref(true)
 const nodeEdit = reactive({
   name: '',
   location: ''
@@ -110,6 +112,7 @@ function connectRuntimeSSE(clientId) {
     const data = JSON.parse(event.data)
     if (details.runtime.list.length >= 360) details.runtime.list.splice(0, 1)
     details.runtime.list.push(data)
+    runtimeLoading.value = false
     runtimeRetryDelay = 1000
   })
   runtimeEventSource.onerror = () => {
@@ -132,14 +135,22 @@ const now = computed(() => details.runtime.list[details.runtime.list.length - 1]
 
 const init = (value) => {
   if (value !== -1) {
+    baseLoading.value = true
+    runtimeLoading.value = true
     details.base = {}
     details.runtime = { list: [] }
     connectRuntimeSSE(value)
-    get(`/api/monitor/details?clientId=${value}`, (data) => Object.assign(details.base, data))
+    get(`/api/monitor/details?clientId=${value}`, (data) => {
+      Object.assign(details.base, data)
+      baseLoading.value = false
+    })
     get(`/api/monitor/runtime_history?clientId=${value}`, (data) => {
       Object.assign(details.runtime, data)
+      runtimeLoading.value = false
     })
   } else {
+    baseLoading.value = false
+    runtimeLoading.value = false
     if (runtimeEventSource) {
       runtimeEventSource.close()
       runtimeEventSource = null
@@ -151,8 +162,9 @@ watch(() => props.id, init, { immediate: true })
 
 <template>
   <el-scrollbar>
-    <div class="client-details" v-loading="Object.keys(details.base).length === 0">
-      <div v-if="Object.keys(details.base).length">
+    <div class="client-details">
+      <el-skeleton v-if="baseLoading" :rows="8" animated />
+      <div v-else>
         <div style="display: flex; justify-content: space-between">
           <div class="title">
             <i class="fa-solid fa-server"></i>
@@ -270,12 +282,10 @@ watch(() => props.id, init, { immediate: true })
           实时监控
         </div>
         <el-divider style="margin: 10px 0" />
-        <div
-          v-if="details.base.online"
-          v-loading="!details.runtime.list.length"
-          style="min-height: 200px"
-        >
-          <div style="display: flex" v-if="details.runtime.list.length">
+        <div v-if="details.base.online" style="min-height: 200px">
+          <el-skeleton v-if="runtimeLoading" :rows="6" animated />
+          <template v-else>
+            <div style="display: flex" v-if="details.runtime.list.length">
             <el-progress
               type="dashboard"
               :width="100"
@@ -336,8 +346,10 @@ watch(() => props.id, init, { immediate: true })
                 />
               </div>
             </div>
-          </div>
-          <runtime-history style="margin-top: 20px" :data="details.runtime.list" />
+            </div>
+            <runtime-history style="margin-top: 20px" :data="details.runtime.list" />
+            <el-empty description="暂无实时数据" v-if="!details.runtime.list.length" />
+          </template>
         </div>
         <el-empty description="服务器处于离线状态，请检查服务器是否正常运行" v-else />
       </div>

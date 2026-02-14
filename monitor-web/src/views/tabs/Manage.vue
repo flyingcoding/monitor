@@ -21,6 +21,7 @@ const locations = [
 
 const store = useStore()
 const list = ref([])
+const loading = ref(true)
 const route = useRoute()
 
 // 获取 token 用于 SSE
@@ -40,15 +41,20 @@ const SSE_MAX_DELAY = 60000
  */
 function connectSSE() {
   const token = getToken()
-  if (!token) return
+  if (!token) {
+    loading.value = false
+    return
+  }
   const baseUrl = import.meta.env.VITE_API_BASE_URL || ''
   eventSource = new EventSource(`${baseUrl}/api/sse/clients?token=${token}`)
   eventSource.addEventListener('clients', (event) => {
     list.value = JSON.parse(event.data)
+    loading.value = false
     sseRetryDelay = 1000
   })
   eventSource.onerror = () => {
     if (eventSource) eventSource.close()
+    if (!list.value.length) loading.value = false
     setTimeout(() => {
       if (route.name === 'manage') connectSSE()
     }, sseRetryDelay)
@@ -59,7 +65,11 @@ function connectSSE() {
 // 手动更新（用于删除/重命名等操作后刷新）
 const updateList = () => {
   if (route.name === 'manage') {
-    get('/api/monitor/list', (data) => (list.value = data))
+    loading.value = true
+    get('/api/monitor/list', (data) => {
+      list.value = data
+      loading.value = false
+    })
   }
 }
 
@@ -133,7 +143,18 @@ const terminal = reactive({
         </el-checkbox>
       </el-checkbox-group>
     </div>
-    <div class="card-list" v-if="list.length">
+    <div class="skeleton-list" v-if="loading">
+      <el-skeleton v-for="idx in 4" :key="idx" animated class="skeleton-item">
+        <template #template>
+          <el-skeleton-item variant="image" style="width: 300px; height: 170px" />
+          <div style="padding: 14px">
+            <el-skeleton-item variant="p" style="width: 70%" />
+            <el-skeleton-item variant="p" style="width: 50%; margin-top: 8px" />
+          </div>
+        </template>
+      </el-skeleton>
+    </div>
+    <div class="card-list" v-else-if="list.length">
       <preview-card
         v-for="item in clientList"
         :key="item.id"
@@ -215,6 +236,14 @@ const terminal = reactive({
     display: flex;
     gap: 20px;
     flex-wrap: wrap;
+  }
+  .skeleton-list {
+    display: flex;
+    gap: 20px;
+    flex-wrap: wrap;
+  }
+  .skeleton-item {
+    width: 300px;
   }
 }
 </style>

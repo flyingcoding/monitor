@@ -3,6 +3,7 @@ import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { AttachAddon } from '@xterm/addon-attach/src/AttachAddon'
 import { Terminal } from '@xterm/xterm'
+import { takeAccessToken } from '@/net'
 import '@xterm/xterm/css/xterm.css'
 
 const props = defineProps({
@@ -32,9 +33,29 @@ const term = new Terminal({
   tabStopWidth: 4
 })
 
-function connect() {
+/**
+ * 构建终端 WebSocket 地址，并在 query 中附带访问令牌。
+ */
+function buildTerminalSocketUrl() {
+  const token = takeAccessToken()
+  if (!token) {
+    return null
+  }
   const wsBaseUrl = import.meta.env.VITE_WS_BASE_URL || `ws://${window.location.host}`
-  socket = new WebSocket(`${wsBaseUrl}/terminal/${props.id}`)
+  const normalizedBaseUrl = wsBaseUrl.endsWith('/') ? wsBaseUrl.slice(0, -1) : wsBaseUrl
+  return `${normalizedBaseUrl}/terminal/${props.id}?token=${encodeURIComponent(token)}`
+}
+
+/**
+ * 建立终端 WebSocket 连接并处理重连。
+ */
+function connect() {
+  const socketUrl = buildTerminalSocketUrl()
+  if (!socketUrl) {
+    emits('dispose')
+    return
+  }
+  socket = new WebSocket(socketUrl)
 
   socket.onopen = () => {
     reconnectCount = 0
