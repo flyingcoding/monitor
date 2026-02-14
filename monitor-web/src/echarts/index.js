@@ -1,4 +1,9 @@
-import * as echarts from 'echarts'
+import * as echarts from 'echarts/core'
+import { LineChart } from 'echarts/charts'
+import { GridComponent, TooltipComponent, DataZoomComponent } from 'echarts/components'
+import { CanvasRenderer } from 'echarts/renderers'
+
+echarts.use([LineChart, GridComponent, TooltipComponent, DataZoomComponent, CanvasRenderer])
 
 function defaultOption(name, dataX) {
   return {
@@ -128,4 +133,4 @@ function doubleSeries(option, name, dataY, colors) {
   ]
 }
 
-export { defaultOption, singleSeries, doubleSeries }
+export { echarts, defaultOption, singleSeries, doubleSeries }

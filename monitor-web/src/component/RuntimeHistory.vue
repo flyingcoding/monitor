@@ -1,7 +1,6 @@
 <script setup>
 import { onBeforeUnmount, onMounted, watch } from 'vue'
-import * as echarts from 'echarts'
-import { defaultOption, doubleSeries, singleSeries } from '@/echarts'
+import { echarts, defaultOption, doubleSeries, singleSeries } from '@/echarts'
 
 const charts = []
 const props = defineProps({
