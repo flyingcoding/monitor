@@ -1,5 +1,6 @@
 package org.monitorclient.utils;
 
+import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONObject;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
@@ -109,18 +110,11 @@ public class NetUtils {
         while (!LocalCacheUtils.isEmpty()) {
             List<RuntimeDetail> batch = LocalCacheUtils.drainBatch();
             if (batch.isEmpty()) break;
-            for (int i = 0; i < batch.size(); i++) {
-                RuntimeDetail cached = batch.get(i);
-                try {
-                    Response response = this.doPost("/runtime", cached);
-                    if (!response.success()) {
-                        log.warn("补报缓存数据失败：{}", response.message());
-                        LocalCacheUtils.requeueUnsentBatch(batch, i);
-                        return;
-                    }
-                } catch (Exception e) {
-                    log.warn("补报缓存数据异常: {}", e.getMessage());
-                    LocalCacheUtils.requeueUnsentBatch(batch, i);
+            if (!this.sendRuntimeBatch(batch)) {
+                log.warn("批量补报失败，回退单条补报。");
+                int failedIndex = this.sendRuntimeOneByOne(batch);
+                if (failedIndex >= 0) {
+                    LocalCacheUtils.requeueUnsentBatch(batch, failedIndex);
                     return;
                 }
             }
@@ -134,6 +128,49 @@ public class NetUtils {
             }
         }
         log.info("缓存数据补报完成");
+    }
+
+    /**
+     * 尝试通过批量接口一次性补报一个批次的数据。
+     *
+     * @param batch 待补报批次
+     * @return 批量补报是否成功
+     */
+    private boolean sendRuntimeBatch(List<RuntimeDetail> batch) {
+        try {
+            Response response = this.doPost("/runtime/batch", batch);
+            if (!response.success()) {
+                log.warn("批量补报返回失败：{}", response.message());
+                return false;
+            }
+            return true;
+        } catch (Exception e) {
+            log.warn("批量补报异常：{}", e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * 逐条补报当前批次数据，用于批量接口不可用时的兼容回退。
+     *
+     * @param batch 待补报批次
+     * @return 失败条目的下标；全部成功则返回 -1
+     */
+    private int sendRuntimeOneByOne(List<RuntimeDetail> batch) {
+        for (int i = 0; i < batch.size(); i++) {
+            RuntimeDetail cached = batch.get(i);
+            try {
+                Response response = this.doPost("/runtime", cached);
+                if (!response.success()) {
+                    log.warn("单条补报失败：{}", response.message());
+                    return i;
+                }
+            } catch (Exception e) {
+                log.warn("单条补报异常：{}", e.getMessage());
+                return i;
+            }
+        }
+        return -1;
     }
 
     private Response doGet(String url) {
@@ -156,7 +193,7 @@ public class NetUtils {
 
     private Response doPost(String url, Object data) {
         try {
-            String rawData = JSONObject.from(data).toJSONString();
+            String rawData = this.serializeRequestBody(data);
             HttpRequest request = HttpRequest.newBuilder().POST(HttpRequest.BodyPublishers.ofString(rawData))
                     .uri(new URI(config.getAddress() + "/monitor" + url))
                     .header("Authorization", config.getToken())
@@ -168,5 +205,15 @@ public class NetUtils {
             log.error("向服务端发起POST请求出现问题", e);
             return Response.errorResponse(e);
         }
+    }
+
+    /**
+     * 将请求体对象序列化为 JSON 字符串，兼容普通对象与集合类型。
+     *
+     * @param data 请求体对象
+     * @return JSON 字符串
+     */
+    private String serializeRequestBody(Object data) {
+        return JSON.toJSONString(data);
     }
 }

@@ -58,6 +58,7 @@
     </dependencies>
 
     <build>
+        <finalName>monitor-client</finalName>
         <plugins>
             <plugin>
                 <groupId>org.springframework.boot</groupId>
