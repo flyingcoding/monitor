@@ -15,9 +15,9 @@ import org.springframework.stereotype.Component;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
-import java.util.Arrays;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
@@ -220,10 +220,11 @@ public class TerminalWebSocket {
 
         private void read() {
             try {
-                byte[] buffer = new byte[1024 * 1024];
+                InputStreamReader reader = new InputStreamReader(input, StandardCharsets.UTF_8);
+                char[] buffer = new char[8 * 1024];
                 int i;
-                while ((i = input.read(buffer)) != -1) {
-                    String text = new String(Arrays.copyOfRange(buffer, 0, i), StandardCharsets.UTF_8);
+                while ((i = reader.read(buffer)) != -1) {
+                    String text = new String(buffer, 0, i);
                     session.getBasicRemote().sendText(text);
                 }
             } catch (Exception e) {

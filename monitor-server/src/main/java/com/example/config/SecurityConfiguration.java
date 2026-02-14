@@ -5,6 +5,7 @@ import com.example.entity.dto.Account;
 import com.example.entity.vo.response.AuthorizeVO;
 import com.example.filter.JwtFilter;
 import com.example.filter.RequestLogFilter;
+import com.example.mapper.struct.AccountStructMapper;
 import com.example.service.AccountService;
 import com.example.utils.Const;
 import com.example.utils.JwtUtils;
@@ -42,6 +43,8 @@ public class SecurityConfiguration {
 
     @Resource
     AccountService service;
+    @Resource
+    AccountStructMapper accountStructMapper;
 
     /**
      * 针对于 SpringSecurity 6 的新版配置方法
@@ -111,7 +114,8 @@ public class SecurityConfiguration {
             if(jwt == null) {
                 writer.write(RestBean.forbidden("登录验证频繁，请稍后再试").asJsonString());
             } else {
-                AuthorizeVO vo = account.asViewObject(AuthorizeVO.class, o -> o.setToken(jwt));
+                AuthorizeVO vo = accountStructMapper.toAuthorizeVO(account);
+                vo.setToken(jwt);
                 vo.setExpire(utils.expireTime());
                 writer.write(RestBean.success(vo).asJsonString());
             }

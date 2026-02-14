@@ -8,7 +8,12 @@ import com.example.service.ClientService;
 import com.example.utils.Const;
 import jakarta.annotation.Resource;
 import jakarta.validation.Valid;
+import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.server.ResponseStatusException;
+
+import java.util.List;
+import java.util.Objects;
 
 /**
  * @program: monitor
@@ -47,5 +52,38 @@ public class ClientController {
                                                @RequestBody @Valid RuntimeDetailVO vo){
         clientService.updateRuntimeDetail(vo,client);
         return RestBean.success();
+    }
+
+    /**
+     * 批量上报运行时数据，逐条复用现有服务逻辑处理缓存补报场景。
+     *
+     * @param client 当前客户端
+     * @param batch  运行时数据批次
+     * @return 处理结果
+     */
+    @PostMapping("/runtime/batch")
+    public RestBean<Void> updateRuntimeBatch(@RequestAttribute(Const.ATTR_CLIENT) Client client,
+                                             @RequestBody List<@Valid RuntimeDetailVO> batch) {
+        if (batch == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "请求体不能为空");
+        }
+        this.validateRuntimeBatch(batch);
+        for (RuntimeDetailVO vo : batch) {
+            clientService.updateRuntimeDetail(vo, client);
+        }
+        return RestBean.success();
+    }
+
+    /**
+     * 对批量运行时数据执行全量预校验，避免中途失败导致部分数据已写入。
+     *
+     * @param batch 运行时数据批次
+     */
+    private void validateRuntimeBatch(List<RuntimeDetailVO> batch) {
+        for (RuntimeDetailVO vo : batch) {
+            if (Objects.isNull(vo)) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "请求体包含空的运行时数据");
+            }
+        }
     }
 }
