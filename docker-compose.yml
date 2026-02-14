@@ -68,6 +68,11 @@ services:
       - "8086:8086"
     volumes:
       - influxdb-data:/var/lib/influxdb2
+    healthcheck:
+      test: ["CMD", "influx", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   monitor-server:
     build:
@@ -81,6 +86,8 @@ services:
       redis:
         condition: service_healthy
       rabbitmq:
+        condition: service_healthy
+      influxdb:
         condition: service_healthy
     environment:
       MYSQL_URL: jdbc:mysql://mysql:3306/monitor?useSSL=false&allowPublicKeyRetrieval=true
@@ -107,6 +114,20 @@ services:
       interval: 30s
       timeout: 10s
       retries: 5
+
+  monitor-client:
+    profiles: ["client"]
+    build:
+      context: ./monitor-client
+      dockerfile: Dockerfile
+    container_name: monitor-client
+    restart: always
+    depends_on:
+      monitor-server:
+        condition: service_healthy
+    environment:
+      MONITOR_SERVER: http://monitor-server:80
+      MONITOR_TOKEN: ${MONITOR_TOKEN}
 
   monitor-web:
     build:
