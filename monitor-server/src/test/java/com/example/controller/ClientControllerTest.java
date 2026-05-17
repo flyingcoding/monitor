@@ -86,7 +86,7 @@ class ClientControllerTest {
     @Test
     void runtimeBatchShouldReturnSuccessAndInvokeServicePerItem() throws Exception {
         runtimeUpdateCount.set(0);
-        Client client = new Client(1, "n1", "t1", "cn", "node-1", new Date());
+        Client client = new Client(1, "n1", "t1", "cn", "node-1", new Date(), null);
         String payload = """
                 [
                   {
@@ -128,7 +128,7 @@ class ClientControllerTest {
     @Test
     void runtimeBatchShouldRejectNullItem() throws Exception {
         runtimeUpdateCount.set(0);
-        Client client = new Client(1, "n1", "t1", "cn", "node-1", new Date());
+        Client client = new Client(1, "n1", "t1", "cn", "node-1", new Date(), null);
 
         mockMvc.perform(post("/monitor/runtime/batch")
                         .contentType("application/json")
@@ -145,7 +145,7 @@ class ClientControllerTest {
     @Test
     void runtimeBatchShouldNotPartiallyPersistWhenContainsNullItem() throws Exception {
         runtimeUpdateCount.set(0);
-        Client client = new Client(1, "n1", "t1", "cn", "node-1", new Date());
+        Client client = new Client(1, "n1", "t1", "cn", "node-1", new Date(), null);
         String payload = """
                 [
                   {

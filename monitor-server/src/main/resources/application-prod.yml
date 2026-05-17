@@ -70,13 +70,26 @@ spring:
       limit: 100
       block: 30
     cors:
-      origin: '*'
+      origin: ${CORS_ORIGIN:}
       credentials: false
       methods: '*'
 security:
   ssh:
     encrypt-key: ${SSH_ENCRYPT_KEY}
 monitor:
+  # v1.2 OIDC/SSO 配置（D3 默认策略，prod 默认不自动建号以严格管控）
+  oidc:
+    enabled: ${MONITOR_OIDC_ENABLED:false}
+    auto-create-user: ${MONITOR_OIDC_AUTO_CREATE_USER:false}
+    require-email-verified: ${MONITOR_OIDC_REQUIRE_EMAIL_VERIFIED:true}
+    link-existing-by-email: ${MONITOR_OIDC_LINK_EXISTING_BY_EMAIL:true}
+    default-role: ${MONITOR_OIDC_DEFAULT_ROLE:user}
+  # v1.2 共享层占位：API Token HMAC-SHA256 密钥（独立于 JWT_KEY），生产必填
+  api-token:
+    hmac-key: ${API_TOKEN_HMAC_KEY:}
+  # v1.2 共享层占位：密码复杂度策略，生产默认 basic（≥8 字符 + 字母 + 数字）
+  password:
+    policy: ${PASSWORD_POLICY:basic}
   health-check:
     enabled: ${MONITOR_HEALTH_CHECK_ENABLED:true}
     interval: ${MONITOR_HEALTH_CHECK_INTERVAL:30000}

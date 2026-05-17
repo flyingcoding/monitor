@@ -33,6 +33,11 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-security</artifactId>
         </dependency>
+        <!--    OAuth2 客户端模块（OIDC/SSO 登录）    -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-oauth2-client</artifactId>
+        </dependency>
         <!--    基础Web模块    -->
         <dependency>
             <groupId>org.springframework.boot</groupId>

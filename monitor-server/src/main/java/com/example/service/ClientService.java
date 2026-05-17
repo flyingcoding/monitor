@@ -56,4 +56,25 @@ public interface ClientService extends IService<Client>{
      * @param clientId 客户端ID
      */
     void forceClientOffline(int clientId);
+
+    /**
+     * 判断指定客户端是否在线。
+     *
+     * <p>判定依据：最近一次心跳或运行时数据更新时间在 60 秒内。
+     * 公开状态页等只读消费者复用此方法以保持与管理后台一致的在线判定语义。
+     *
+     * @param clientId 客户端ID
+     * @return 是否在线
+     */
+    boolean isClientOnline(int clientId);
+
+    /**
+     * 查询客户端最近一次心跳距今的秒数。
+     *
+     * <p>公开状态页用来回显"上次见到 N 秒前"；未上线过的客户端返回 {@code null}。
+     *
+     * @param clientId 客户端ID
+     * @return 距今秒数，或 {@code null} 表示无心跳记录
+     */
+    Long lastSeenSecondsAgo(int clientId);
 }

@@ -79,7 +79,7 @@ public class ClientServiceImpl extends ServiceImpl<ClientMapper, Client> impleme
     public boolean registerClient(String token) {
         if (this.registerToken.equals(token)) {
             int id = this.randomClientId();
-            Client client = new Client(id, "未命名主机", token, "cn", "未命名节点", new Date());
+            Client client = new Client(id, "未命名主机", token, "cn", "未命名节点", new Date(), null);
             if (this.save(client)) {
                 this.registerToken = this.createNewToken();
                 this.addClientCache(client);
@@ -354,6 +354,30 @@ public class ClientServiceImpl extends ServiceImpl<ClientMapper, Client> impleme
             return true;
         RuntimeDetailVO runtime = currentRuntime.getIfPresent(clientId);
         return runtime != null && System.currentTimeMillis() - runtime.getTimestamp() < 60 * 1000;
+    }
+
+    @Override
+    public boolean isClientOnline(int clientId) {
+        return this.isOnline(clientId);
+    }
+
+    @Override
+    public Long lastSeenSecondsAgo(int clientId) {
+        long now = System.currentTimeMillis();
+        Long lastHeartbeat = heartbeatMap.get(clientId);
+        RuntimeDetailVO runtime = currentRuntime.getIfPresent(clientId);
+        long candidate = -1L;
+        if (lastHeartbeat != null) {
+            candidate = lastHeartbeat;
+        }
+        if (runtime != null && runtime.getTimestamp() > candidate) {
+            candidate = runtime.getTimestamp();
+        }
+        if (candidate <= 0) {
+            return null;
+        }
+        long delta = now - candidate;
+        return delta < 0 ? 0L : delta / 1000L;
     }
 
     private void addClientCache(Client client) {

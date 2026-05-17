@@ -183,7 +183,7 @@ class AlertHistoryControllerTest {
     @Test
     void subAccountListShouldBeFilteredByAllowedClients() throws Exception {
         // 子账户仅可访问 client 1001
-        currentAccount.set(new Account(7, "u1", "p", "u1@test.com", "user", "[1001]", null));
+        currentAccount.set(new Account(7, "u1", "p", "u1@test.com", "user", "[1001]", null, Boolean.TRUE));
         seedHistory(1L, 1001, "warning", "firing", new Date());
         seedHistory(2L, 1002, "critical", "firing", new Date());
 
@@ -206,7 +206,7 @@ class AlertHistoryControllerTest {
      */
     @Test
     void subAccountListShouldRejectOutOfScopeClientFilter() throws Exception {
-        currentAccount.set(new Account(7, "u1", "p", "u1@test.com", "user", "[1001]", null));
+        currentAccount.set(new Account(7, "u1", "p", "u1@test.com", "user", "[1001]", null, Boolean.TRUE));
 
         mockMvc.perform(get("/api/alert/history")
                         .param("clientId", "1002")
@@ -220,7 +220,7 @@ class AlertHistoryControllerTest {
      */
     @Test
     void detailShouldRejectOutOfScope() throws Exception {
-        currentAccount.set(new Account(7, "u1", "p", "u1@test.com", "user", "[1001]", null));
+        currentAccount.set(new Account(7, "u1", "p", "u1@test.com", "user", "[1001]", null, Boolean.TRUE));
         seedHistory(1L, 1002, "critical", "firing", new Date());
 
         mockMvc.perform(get("/api/alert/history/1")
@@ -387,7 +387,7 @@ class AlertHistoryControllerTest {
      */
     @Test
     void ackShouldRejectOutOfScope() throws Exception {
-        currentAccount.set(new Account(7, "u1", "p", "u1@test.com", "user", "[1001]", null));
+        currentAccount.set(new Account(7, "u1", "p", "u1@test.com", "user", "[1001]", null, Boolean.TRUE));
         seedHistory(1L, 1002, "warning", "firing", new Date());
 
         mockMvc.perform(post("/api/alert/history/1/ack")
@@ -404,7 +404,7 @@ class AlertHistoryControllerTest {
      */
     @Test
     void subAccountCanCloseHistoryInScope() throws Exception {
-        currentAccount.set(new Account(7, "u1", "p", "u1@test.com", "user", "[1001]", null));
+        currentAccount.set(new Account(7, "u1", "p", "u1@test.com", "user", "[1001]", null, Boolean.TRUE));
         seedHistory(1L, 1001, "warning", "firing", new Date());
 
         mockMvc.perform(post("/api/alert/history/1/close")

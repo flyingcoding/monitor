@@ -683,7 +683,7 @@ class AlertEvaluatorImplTest {
                 new Class[]{ClientService.class},
                 (proxy, method, args) -> {
                     if ("findClientById".equals(method.getName())) {
-                        Client c = new Client((Integer) args[0], "client-" + args[0], "tok", "cn", "n", new Date());
+                        Client c = new Client((Integer) args[0], "client-" + args[0], "tok", "cn", "n", new Date(), null);
                         return c;
                     }
                     return defaultProxyMethod(proxy, method, args, "ClientServiceStub");

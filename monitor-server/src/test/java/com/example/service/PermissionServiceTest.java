@@ -29,7 +29,7 @@ class PermissionServiceTest {
     @Test
     void permissionCheckShouldUseAccountClientList() {
         PermissionService permissionService = new PermissionService();
-        Account account = new Account(1, "u1", "p1", "u1@test.com", "user", "[1,3]", null);
+        Account account = new Account(1, "u1", "p1", "u1@test.com", "user", "[1,3]", null, Boolean.TRUE);
 
         AccountService accountService = (AccountService) Proxy.newProxyInstance(
                 AccountService.class.getClassLoader(),

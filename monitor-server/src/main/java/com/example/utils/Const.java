@@ -22,6 +22,14 @@ public final class Const {
     public final static String ATTR_USER_ID = "userId";
     public final static String ATTR_CLIENT = "client";
     public final static String ATTR_USER_ROLE = "userRole";
+    public final static String ATTR_API_TOKEN = "attr.api_token";
+    public final static String ATTR_AUTH_METHOD = "attr.auth_method";
+    //鉴权方式标识（写入 ATTR_AUTH_METHOD），便于日志与下游分流
+    public final static String AUTH_METHOD_JWT = "jwt";
+    public final static String AUTH_METHOD_API_TOKEN = "api_token";
+    public final static String AUTH_METHOD_OIDC = "oidc";
+    //API Token 前缀（HMAC-SHA256，独立 HMAC 密钥，详见 prd.md D5）
+    public final static String API_TOKEN_PREFIX = "mtk_";
     //消息队列
     public final static String MQ_MAIL = "mail";
     public final static String MQ_NOTIFICATION = "notification";
