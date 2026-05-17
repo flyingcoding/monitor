@@ -2,6 +2,7 @@ package com.example.config;
 
 import com.example.controller.SseController;
 import com.example.entity.vo.request.RuntimeDetailVO;
+import com.example.entity.vo.response.AlertHistoryVO;
 import jakarta.annotation.Resource;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.context.annotation.Lazy;
@@ -35,5 +36,15 @@ public class LocalSseEventBus implements SseEventBus {
     @Override
     public void publishRuntime(int clientId, RuntimeDetailVO vo) {
         sseController.pushRuntime(clientId, vo);
+    }
+
+    /**
+     * 向本地 SSE 控制器发布告警触发事件。
+     *
+     * @param vo 告警历史 VO
+     */
+    @Override
+    public void publishAlertFired(AlertHistoryVO vo) {
+        sseController.pushAlertFired(vo);
     }
 }

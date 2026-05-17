@@ -1,6 +1,7 @@
 package com.example.controller;
 
 import com.example.entity.vo.request.RuntimeDetailVO;
+import com.example.entity.vo.response.AlertHistoryVO;
 import com.example.entity.vo.response.ClientPreviewVO;
 import com.example.service.ClientService;
 import com.example.service.PermissionService;
@@ -37,8 +38,12 @@ public class SseController {
 
     private final List<ClientListSubscriber> clientListEmitters = new CopyOnWriteArrayList<>();
     private final Map<Integer, List<SseEmitter>> runtimeEmitters = new ConcurrentHashMap<>();
+    private final List<AlertSubscriber> alertEmitters = new CopyOnWriteArrayList<>();
 
     private record ClientListSubscriber(int userId, String userRole, SseEmitter emitter) {
+    }
+
+    private record AlertSubscriber(int userId, String userRole, SseEmitter emitter) {
     }
 
     /**
@@ -103,6 +108,27 @@ public class SseController {
     }
 
     /**
+     * 订阅告警触发事件流；按用户权限过滤可见客户端的告警。
+     *
+     * @param token    前端通过 query 透传的 JWT token
+     * @param userId   当前用户ID
+     * @param userRole 当前用户角色
+     * @return SSE 发射器
+     */
+    @GetMapping("/alerts")
+    public SseEmitter subscribeAlerts(@RequestParam String token,
+                                      @RequestAttribute(Const.ATTR_USER_ID) int userId,
+                                      @RequestAttribute(Const.ATTR_USER_ROLE) String userRole) {
+        SseEmitter emitter = new SseEmitter(0L);
+        AlertSubscriber subscriber = new AlertSubscriber(userId, userRole, emitter);
+        alertEmitters.add(subscriber);
+        emitter.onCompletion(() -> removeAlertEmitter(emitter));
+        emitter.onTimeout(() -> removeAlertEmitter(emitter));
+        emitter.onError(e -> removeAlertEmitter(emitter));
+        return emitter;
+    }
+
+    /**
      * 向所有主机列表订阅者推送最新数据，并按订阅者权限过滤可见主机。
      */
     public void pushClientList() {
@@ -138,6 +164,28 @@ public class SseController {
     }
 
     /**
+     * 向所有告警订阅者推送 {@code alert-fired} 事件，按订阅者权限过滤告警可见性。
+     * 管理员收到所有告警；子账户仅收到 clientId 属于其可访问范围的告警。
+     *
+     * @param vo 告警历史 VO
+     */
+    public void pushAlertFired(AlertHistoryVO vo) {
+        if (vo == null) return;
+        for (AlertSubscriber subscriber : alertEmitters) {
+            try {
+                if (vo.getClientId() == null
+                        || permissionService.canAccessClient(subscriber.userId(),
+                                                             subscriber.userRole(),
+                                                             vo.getClientId())) {
+                    subscriber.emitter().send(SseEmitter.event().name("alert-fired").data(vo));
+                }
+            } catch (Exception e) {
+                removeAlertEmitter(subscriber.emitter());
+            }
+        }
+    }
+
+    /**
      * 应用关闭前主动完成所有 SSE 连接，避免强制断连。
      */
     @PreDestroy
@@ -161,6 +209,14 @@ public class SseController {
             list.clear();
         });
         runtimeEmitters.clear();
+
+        for (AlertSubscriber subscriber : alertEmitters) {
+            try {
+                subscriber.emitter().complete();
+            } catch (Exception ignored) {
+            }
+        }
+        alertEmitters.clear();
     }
 
     /**
@@ -187,5 +243,14 @@ public class SseController {
         if (emitters.isEmpty()) {
             runtimeEmitters.remove(clientId);
         }
+    }
+
+    /**
+     * 移除告警事件订阅者。
+     *
+     * @param emitter SSE 发射器
+     */
+    private void removeAlertEmitter(SseEmitter emitter) {
+        alertEmitters.removeIf(subscriber -> subscriber.emitter() == emitter);
     }
 }

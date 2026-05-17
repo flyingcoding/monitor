@@ -11,6 +11,7 @@ import com.example.mapper.ClientDetailMapper;
 import com.example.mapper.ClientMapper;
 import com.example.mapper.ClientSshMapper;
 import com.example.mapper.struct.ClientStructMapper;
+import com.example.service.AlertEvaluator;
 import com.example.service.ClientService;
 import com.example.config.SseEventBus;
 import com.example.utils.CryptoUtils;
@@ -62,6 +63,10 @@ public class ClientServiceImpl extends ServiceImpl<ClientMapper, Client> impleme
     private ClientStructMapper clientStructMapper;
     @Resource
     private CryptoUtils cryptoUtils;
+
+    @Lazy
+    @Resource
+    private AlertEvaluator alertEvaluator;
 
     @PostConstruct
     public void initClientCache() {
@@ -153,6 +158,7 @@ public class ClientServiceImpl extends ServiceImpl<ClientMapper, Client> impleme
         influx.writeRuntimeData(client.getId(), vo);
         sseEventBus.publishRuntime(client.getId(), vo);
         sseEventBus.publishClientList();
+        alertEvaluator.evaluate(client.getId(), vo);
     }
 
     /**

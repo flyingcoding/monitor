@@ -49,6 +49,12 @@
             <artifactId>mybatis-plus-boot-starter</artifactId>
             <version>3.5.16</version>
         </dependency>
+        <!--    Mybatis-Plus jsqlparser 适配（提供 PaginationInnerInterceptor 等可选拦截器）   -->
+        <dependency>
+            <groupId>com.baomidou</groupId>
+            <artifactId>mybatis-plus-jsqlparser</artifactId>
+            <version>3.5.16</version>
+        </dependency>
         <!--    MySQL驱动    -->
         <dependency>
             <groupId>com.mysql</groupId>
