@@ -17,6 +17,7 @@
           :active-action-icon="Moon"
           :inactive-action-icon="Sunny"
         />
+        <notification-bell style="margin-right: 10px" />
         <div style="text-align: right; line-height: 16px; margin-right: 10px">
           <div>
             <el-tag type="success" v-if="store.isAdmin" size="small">管理员</el-tag>
@@ -44,7 +45,7 @@
     <el-main class="main-content">
       <router-view v-slot="{ Component }">
         <transition name="el-fade-in-linear" mode="out-in">
-          <keep-alive exclude="security">
+          <keep-alive exclude="security,AlertView">
             <component :is="Component" />
           </keep-alive>
         </transition>
@@ -57,34 +58,66 @@
 import { logout } from '@/net'
 import router from '@/router'
 import { Back, Moon, Sunny } from '@element-plus/icons-vue'
-import { ref } from 'vue'
+import { onMounted, onBeforeUnmount, ref, watch } from 'vue'
 import { useDark } from '@vueuse/core'
 import { useRoute } from 'vue-router'
 import TabItem from '@/component/TabItem.vue'
+import NotificationBell from '@/component/NotificationBell.vue'
 import { useStore } from '@/store'
+import { useNotificationStore } from '@/store/notification'
+import { connectAlertSse, closeAlertSse } from '@/net/alertSse'
 
 const store = useStore()
 const route = useRoute()
 const dark = ref(useDark())
+const notificationStore = useNotificationStore()
 const tabs = [
   { id: 1, name: '管理', route: 'manage' },
-  { id: 2, name: '安全', route: 'security' }
+  { id: 2, name: '安全', route: 'security' },
+  { id: 3, name: '告警', route: 'alert-history' }
 ]
+
+/**
+ * 根据当前路由名称推断激活的 tab id，告警相关子路由统一归到告警 tab。
+ *
+ * @returns {number} 激活的 tab id
+ */
 const defaultIndex = () => {
+  if (route.name && route.name.toString().startsWith('alert')) return 3
   for (let tab of tabs) {
     if (route.name === tab.route) return tab.id
   }
   return 1
 }
 const tab = ref(defaultIndex())
+
+watch(
+  () => route.name,
+  () => {
+    tab.value = defaultIndex()
+  }
+)
+
 function changePage(item) {
   tab.value = item.id
   router.push({ name: item.route })
 }
 
 function userLogout() {
+  closeAlertSse()
+  notificationStore.reset()
   logout(() => router.push('/'))
 }
+
+onMounted(() => {
+  connectAlertSse((event) => {
+    notificationStore.pushAlert(event)
+  })
+})
+
+onBeforeUnmount(() => {
+  closeAlertSse()
+})
 </script>
 
 <style scoped>

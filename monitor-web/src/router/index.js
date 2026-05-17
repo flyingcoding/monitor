@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { unauthorized } from '@/net'
+import { useStore } from '@/store'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -35,6 +36,30 @@ const router = createRouter({
           path: 'security',
           name: 'security',
           component: () => import('@/views/tabs/Security.vue')
+        },
+        {
+          path: 'alert',
+          component: () => import('@/views/tabs/AlertView.vue'),
+          redirect: { name: 'alert-history' },
+          children: [
+            {
+              path: 'history',
+              name: 'alert-history',
+              component: () => import('@/views/alert/HistoryView.vue')
+            },
+            {
+              path: 'rule',
+              name: 'alert-rule',
+              component: () => import('@/views/alert/RuleView.vue'),
+              meta: { adminOnly: true }
+            },
+            {
+              path: 'channel',
+              name: 'alert-channel',
+              component: () => import('@/views/alert/ChannelView.vue'),
+              meta: { adminOnly: true }
+            }
+          ]
         }
       ]
     }
@@ -43,10 +68,17 @@ const router = createRouter({
 
 router.beforeEach((to, from, next) => {
   const isUnauthorized = unauthorized()
-  if (to.name.startsWith('welcome') && !isUnauthorized) {
+  if (to.name && to.name.toString().startsWith('welcome') && !isUnauthorized) {
     next('/index')
   } else if (to.fullPath.startsWith('/index') && isUnauthorized) {
     next('/')
+  } else if (to.meta && to.meta.adminOnly) {
+    const store = useStore()
+    if (!store.isAdmin) {
+      next({ name: 'alert-history' })
+    } else {
+      next()
+    }
   } else {
     next()
   }
