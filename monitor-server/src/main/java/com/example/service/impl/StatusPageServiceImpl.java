@@ -167,18 +167,20 @@ public class StatusPageServiceImpl
     }
 
     /**
-     * 解析公开客户端 ID 列表。{@code clientIds == null} 时表示"公开所有"（默认行为，初始化场景）；
-     * 空字符串显式表示"公开零个"（管理员主动清空）。
+     * 解析公开客户端 ID 列表。
+     *
+     * <p>P2-3 修复：默认拒绝（default-deny）—— {@code clientIds == null} 与 {@code clientIds == ""}
+     * 都视为"未配置可见客户端"，返回空列表。管理员必须通过 {@code /status/config} 主动勾选客户端
+     * 才会被纳入公开状态页（research/status-page-design.md §default-deny）。
+     *
+     * <p>同时配合 {@link #computeSummary} 顶部的 {@code enabled} 检查，三重保护：
+     * {@code enabled=false} / {@code clientIds=null} / {@code clientIds=""} 都返回零可见客户端。
      *
      * @param config 配置实体
-     * @return 客户端 ID 列表（顺序与配置一致；id == null 表示 null 公开所有 → 取所有客户端）
+     * @return 客户端 ID 列表；任何"未明确配置"的情况都返回空列表
      */
     private List<Integer> resolvePublicClientIds(StatusPageConfig config) {
-        if (config.getClientIds() == null) {
-            // 默认公开所有客户端
-            return clientService.list().stream().map(Client::getId).toList();
-        }
-        if (config.getClientIds().isBlank()) {
+        if (config.getClientIds() == null || config.getClientIds().isBlank()) {
             return List.of();
         }
         Set<Integer> dedup = new LinkedHashSet<>();
@@ -229,17 +231,20 @@ public class StatusPageServiceImpl
     }
 
     /**
-     * 读取（或在异常情况下生成临时占位）配置行。{@code V3} 迁移已经播种 id=1 行，
+     * 读取（或在异常情况下生成临时占位）配置行。{@code V3} 迁移已经播种 id=1 行（默认 enabled=0），
      * 此处 fallback 仅用于测试场景或迁移失败时不让 status page 整体 500。
+     *
+     * <p>P2-3 修复：fallback 也走 {@code enabled=false} 防止迁移失败后意外开放公开访问。
      */
     private StatusPageConfig loadOrInit() {
         StatusPageConfig config = this.getById(SINGLETON_ID);
         if (config == null) {
-            log.warn("公开状态页配置缺失（id=1），回退到只读默认配置；请确认 Flyway V3 是否成功执行");
+            log.warn("公开状态页配置缺失（id=1），回退到只读默认配置（enabled=false）；请确认 Flyway V3 是否成功执行");
             config = new StatusPageConfig();
             config.setId(SINGLETON_ID);
             config.setTitle("Service Status");
-            config.setEnabled(Boolean.TRUE);
+            config.setEnabled(Boolean.FALSE);
+            config.setClientIds("");
         }
         return config;
     }

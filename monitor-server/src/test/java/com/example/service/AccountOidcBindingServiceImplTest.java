@@ -310,4 +310,64 @@ class AccountOidcBindingServiceImplTest {
         Assertions.assertEquals("github", list.get(0).getProviderName());
         Assertions.assertEquals("u@example.com", list.get(0).getEmail());
     }
+
+    // ----- P2-2 bindIfFree -----
+
+    /**
+     * P2-2：(provider, subject) 不存在时 bindIfFree 返回 CREATED 并插入新行。
+     */
+    @Test
+    void bindIfFreeReturnsCreatedForFreshSubject() {
+        AccountOidcBindingService.BindingResult result =
+                service.bindIfFree(1, "github", "sub-new", "user@example.com");
+        Assertions.assertEquals(AccountOidcBindingService.BindingResult.CREATED, result);
+        Assertions.assertEquals(1, rows.size());
+        Assertions.assertEquals("user@example.com", rows.get(0).getEmail());
+    }
+
+    /**
+     * P2-2：相同 (accountId, provider, subject) 重复绑定时返回 ALREADY_OWNED_BY_SELF，不新增行。
+     */
+    @Test
+    void bindIfFreeReturnsAlreadyOwnedBySelfForSameAccount() {
+        AccountOidcBinding existing = new AccountOidcBinding();
+        existing.setId(idSeq.getAndIncrement());
+        existing.setAccountId(1);
+        existing.setProviderName("github");
+        existing.setSubject("sub-x");
+        existing.setEmail("old@example.com");
+        existing.setBoundAt(new Date());
+        rows.add(existing);
+
+        AccountOidcBindingService.BindingResult result =
+                service.bindIfFree(1, "github", "sub-x", "new@example.com");
+        Assertions.assertEquals(AccountOidcBindingService.BindingResult.ALREADY_OWNED_BY_SELF, result);
+        Assertions.assertEquals(1, rows.size(), "ALREADY_OWNED_BY_SELF 不得新增行");
+        Assertions.assertEquals("new@example.com", rows.get(0).getEmail(),
+                "P2-2：自有绑定仍允许刷新 email");
+    }
+
+    /**
+     * P2-2：(provider, subject) 已属其他账号时 bindIfFree 返回 CONFLICT，绝不修改任何行。
+     */
+    @Test
+    void bindIfFreeReturnsConflictForOtherAccount() {
+        AccountOidcBinding existing = new AccountOidcBinding();
+        existing.setId(idSeq.getAndIncrement());
+        existing.setAccountId(1);
+        existing.setProviderName("github");
+        existing.setSubject("sub-y");
+        existing.setEmail("owner@example.com");
+        existing.setBoundAt(new Date());
+        rows.add(existing);
+
+        AccountOidcBindingService.BindingResult result =
+                service.bindIfFree(2, "github", "sub-y", "intruder@example.com");
+        Assertions.assertEquals(AccountOidcBindingService.BindingResult.CONFLICT, result);
+        Assertions.assertEquals(1, rows.size(), "CONFLICT 不得新增行");
+        Assertions.assertEquals(1, rows.get(0).getAccountId(),
+                "CONFLICT 不得修改归属账号");
+        Assertions.assertEquals("owner@example.com", rows.get(0).getEmail(),
+                "CONFLICT 不得改写 email（防止侧信道泄露）");
+    }
 }

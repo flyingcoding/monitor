@@ -56,7 +56,7 @@ public class ApiTokenController {
                                               @RequestAttribute(Const.ATTR_USER_ID) int accountId,
                                               @RequestBody @Valid ApiTokenCreateVO vo) {
         if (isApiTokenAuth(request)) {
-            return RestBean.forbidden("不允许通过 API Token 创建新的 API Token");
+            return RestBean.forbidden("不允许通过 API Token 管理 API Token");
         }
         ApiTokenCreatedVO created = apiTokenService.create(accountId, vo);
         return RestBean.success(created);
@@ -65,24 +65,39 @@ public class ApiTokenController {
     /**
      * 列出当前账号的全部 API Token（不含明文 / hash）。
      *
+     * <p>P2-1 修复：与 {@link #create} 一致，拒绝以 API Token 鉴权的请求调用，防止 readwrite token
+     * 自行枚举/操作账号下的其他 token（research/api-token-design.md §scope "tokens can't manage tokens"）。
+     *
+     * @param request   Servlet 请求
      * @param accountId 当前账号 ID
      * @return token 元数据列表
      */
     @GetMapping
-    public RestBean<List<ApiTokenVO>> list(@RequestAttribute(Const.ATTR_USER_ID) int accountId) {
+    public RestBean<List<ApiTokenVO>> list(HttpServletRequest request,
+                                           @RequestAttribute(Const.ATTR_USER_ID) int accountId) {
+        if (isApiTokenAuth(request)) {
+            return RestBean.forbidden("不允许通过 API Token 管理 API Token");
+        }
         return RestBean.success(apiTokenService.list(accountId));
     }
 
     /**
      * 删除当前账号下指定 token。
      *
+     * <p>P2-1 修复：同 {@link #list} 拒绝 API Token 自管。
+     *
+     * @param request   Servlet 请求
      * @param accountId 当前账号 ID
      * @param id        token 主键
      * @return 删除结果；不存在时返回 404
      */
     @DeleteMapping("/{id}")
-    public RestBean<Void> delete(@RequestAttribute(Const.ATTR_USER_ID) int accountId,
+    public RestBean<Void> delete(HttpServletRequest request,
+                                 @RequestAttribute(Const.ATTR_USER_ID) int accountId,
                                  @PathVariable Long id) {
+        if (isApiTokenAuth(request)) {
+            return RestBean.forbidden("不允许通过 API Token 管理 API Token");
+        }
         boolean removed = apiTokenService.delete(accountId, id);
         if (!removed) {
             return RestBean.failure(404, "API Token 不存在");
@@ -105,7 +120,7 @@ public class ApiTokenController {
                                               @RequestAttribute(Const.ATTR_USER_ID) int accountId,
                                               @PathVariable Long id) {
         if (isApiTokenAuth(request)) {
-            return RestBean.forbidden("不允许通过 API Token 旋转 API Token");
+            return RestBean.forbidden("不允许通过 API Token 管理 API Token");
         }
         Optional<ApiTokenCreatedVO> result = apiTokenService.rotate(accountId, id);
         return result.map(RestBean::success)

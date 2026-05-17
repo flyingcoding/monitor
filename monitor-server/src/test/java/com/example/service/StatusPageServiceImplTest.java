@@ -182,10 +182,11 @@ class StatusPageServiceImplTest {
     }
 
     /**
-     * {@code clientIds == null} 表示默认公开所有客户端。
+     * P2-3：默认 default-deny。{@code clientIds == null} 不再表示"公开所有客户端"。
+     * 必须由管理员显式选择 client_ids 才能公开。
      */
     @Test
-    void nullClientIdsPublishesAllClients() {
+    void nullClientIdsHidesAllClientsByDefault() {
         clientRows.add(newClient(1, "host-1", "Web Server"));
         clientRows.add(newClient(2, "host-2", null));
         availabilityBuckets.put(1, bucketsAllOne(48));
@@ -194,10 +195,42 @@ class StatusPageServiceImplTest {
         clientOnlineMap.put(2, false);
 
         StatusPageSummaryVO vo = service.getCachedSummary();
-        Assertions.assertEquals(2, vo.getClients().size());
-        Assertions.assertEquals(1.0, vo.getOverallAvailability());
-        Assertions.assertTrue(vo.getClients().get(0).isOnline());
-        Assertions.assertFalse(vo.getClients().get(1).isOnline());
+        Assertions.assertTrue(vo.getClients().isEmpty(),
+                "P2-3 default-deny：clientIds=null 必须返回空，管理员未主动选择则不公开任何客户端");
+        Assertions.assertNull(vo.getOverallAvailability());
+    }
+
+    /**
+     * P2-3：默认种子（enabled=0 + client_ids=''）等价于 default-deny。
+     */
+    @Test
+    void postMigrationDefaultIsDeny() {
+        StatusPageConfig cfg = configRows.get(1);
+        cfg.setEnabled(Boolean.FALSE);
+        cfg.setClientIds("");
+        clientRows.add(newClient(1, "host", "Host"));
+        availabilityBuckets.put(1, bucketsAllOne(48));
+
+        StatusPageSummaryVO vo = service.getCachedSummary();
+        Assertions.assertTrue(vo.getClients().isEmpty(),
+                "P2-3：迁移后默认 enabled=false + client_ids='' 必须不暴露任何客户端");
+        Assertions.assertEquals(0, influxQueryCount.get(),
+                "P2-3：禁用时不应触发 InfluxDB 查询");
+    }
+
+    /**
+     * 即使 enabled=true 但未勾选任何客户端，依然不返回客户端列表。
+     */
+    @Test
+    void enabledWithoutAnyClientSelectionStillHidesClients() {
+        StatusPageConfig cfg = configRows.get(1);
+        cfg.setEnabled(Boolean.TRUE);
+        cfg.setClientIds(""); // 显式空：管理员开启但未选客户端
+        clientRows.add(newClient(1, "host-1", "Web Server"));
+        availabilityBuckets.put(1, bucketsAllOne(48));
+
+        StatusPageSummaryVO vo = service.getCachedSummary();
+        Assertions.assertTrue(vo.getClients().isEmpty());
     }
 
     /**
@@ -207,6 +240,8 @@ class StatusPageServiceImplTest {
     void cacheShouldOnlyQueryInfluxOncePerWindow() {
         clientRows.add(newClient(1, "host-1", "Web"));
         availabilityBuckets.put(1, bucketsAllOne(48));
+        // P2-3：default-deny 后必须显式选定客户端
+        configRows.get(1).setClientIds("1");
 
         for (int i = 0; i < 100; i++) {
             service.getCachedSummary();
@@ -222,6 +257,7 @@ class StatusPageServiceImplTest {
     void updateConfigShouldInvalidateCache() {
         clientRows.add(newClient(1, "host-1", "Web"));
         availabilityBuckets.put(1, bucketsAllOne(48));
+        configRows.get(1).setClientIds("1");
 
         service.getCachedSummary();
         Assertions.assertEquals(1, influxQueryCount.get());
@@ -229,7 +265,7 @@ class StatusPageServiceImplTest {
         StatusPageConfigUpdateVO upd = new StatusPageConfigUpdateVO();
         upd.setTitle("New Title");
         upd.setEnabled(Boolean.TRUE);
-        upd.setClientIds(null);
+        upd.setClientIds(List.of(1));
         service.updateConfig(upd);
 
         service.getCachedSummary();
@@ -247,6 +283,7 @@ class StatusPageServiceImplTest {
         // 2 号 client 故意不放入，触发异常分支
         clientOnlineMap.put(1, true);
         clientOnlineMap.put(2, false);
+        configRows.get(1).setClientIds("1,2");
 
         StatusPageSummaryVO vo = service.getCachedSummary();
         Assertions.assertEquals(2, vo.getClients().size());
@@ -269,6 +306,7 @@ class StatusPageServiceImplTest {
     void displayNameFallsBackToInternalName() {
         clientRows.add(newClient(1, "prod-db-01", null));
         availabilityBuckets.put(1, bucketsAllOne(48));
+        configRows.get(1).setClientIds("1");
 
         StatusPageSummaryVO vo = service.getCachedSummary();
         Assertions.assertEquals(1, vo.getClients().size());
@@ -284,6 +322,7 @@ class StatusPageServiceImplTest {
         clientRows.add(newClient(1, "internal-host", "Web Server"));
         availabilityBuckets.put(1, bucketsAllOne(48));
         clientOnlineMap.put(1, true);
+        configRows.get(1).setClientIds("1");
 
         StatusPageSummaryVO vo = service.getCachedSummary();
         String json = com.alibaba.fastjson2.JSON.toJSONString(vo);

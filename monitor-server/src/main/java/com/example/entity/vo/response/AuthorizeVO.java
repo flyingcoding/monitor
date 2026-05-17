@@ -11,6 +11,7 @@ import java.util.Date;
 public class AuthorizeVO {
     String username;
     String role;
+    String email;
     String token;
     Date expire;
 }

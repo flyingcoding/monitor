@@ -16,6 +16,7 @@ import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Date;
 import java.util.List;
@@ -104,7 +105,17 @@ public class ApiTokenServiceImpl
         return removed;
     }
 
+    /**
+     * 旋转 token：删除旧 token 并以相同 name/scope/expiresAt 新建。
+     *
+     * <p>P2-4 修复：标注 {@link Transactional @Transactional(rollbackFor = Exception.class)}，
+     * 保证 {@link #removeById(java.io.Serializable)} 与 {@link #create(int, ApiTokenCreateVO)}
+     * 处于同一事务。{@link com.example.utils.ApiTokenUtils#hash(String)} 在密钥缺失时抛
+     * {@link IllegalStateException}，默认 Spring 事务管理对 {@link RuntimeException} 子类自动回滚；
+     * 显式 {@code rollbackFor = Exception.class} 用于兜底未来可能的检查型异常路径。
+     */
     @Override
+    @Transactional(rollbackFor = Exception.class)
     public Optional<ApiTokenCreatedVO> rotate(int accountId, long tokenId) {
         ApiToken existing = this.getById(tokenId);
         if (existing == null || existing.getAccountId() == null || existing.getAccountId() != accountId) {

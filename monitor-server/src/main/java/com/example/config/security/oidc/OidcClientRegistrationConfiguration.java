@@ -30,13 +30,18 @@ public class OidcClientRegistrationConfiguration {
      *
      * @param oidcProviderService              Provider DB 读写
      * @param oauth2ClientPropertiesProvider   yaml Provider（可选）
+     * @param oidcProperties                   {@code monitor.oidc.*} 总开关；{@code enabled=false}
+     *                                         时 repository 返回空，配合 SecurityConfiguration permitAll
+     *                                         的 {@code /oauth2/**} 路径让 Spring Security 404 兜底，
+     *                                         实现"全局 kill-switch"语义（修复 P1-2）。
      * @return ClientRegistrationRepository
      */
     @Bean
     public ClientRegistrationRepository clientRegistrationRepository(
             OidcProviderService oidcProviderService,
-            ObjectProvider<OAuth2ClientProperties> oauth2ClientPropertiesProvider) {
-        log.info("OIDC ClientRegistrationRepository 装配混合实现（DB 优先 + yaml 兜底）");
-        return new DelegatingClientRegistrationRepository(oidcProviderService, oauth2ClientPropertiesProvider);
+            ObjectProvider<OAuth2ClientProperties> oauth2ClientPropertiesProvider,
+            OidcProperties oidcProperties) {
+        log.info("OIDC ClientRegistrationRepository 装配混合实现（DB 优先 + yaml 兜底），enabled={}", oidcProperties.isEnabled());
+        return new DelegatingClientRegistrationRepository(oidcProviderService, oauth2ClientPropertiesProvider, oidcProperties);
     }
 }

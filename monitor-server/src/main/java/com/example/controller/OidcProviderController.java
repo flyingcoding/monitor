@@ -8,6 +8,7 @@ import com.example.service.OidcProviderService;
 import com.example.service.PermissionService;
 import com.example.utils.Const;
 import jakarta.annotation.Resource;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -28,6 +29,10 @@ import java.util.List;
  * <p>与 {@code NotificationChannelController} 同款鉴权模式：在每个方法首行用
  * {@link PermissionService#isAdmin(String)} 校验角色，非管理员返回 {@link RestBean#noPermission()}。
  * 不使用 {@code @PreAuthorize}，与现有 Controller 风格保持一致。
+ *
+ * <p>额外约束：拒绝以 API Token 鉴权的请求调用（即使持有 admin 角色的 token 也不可），
+ * 保持 "token 不能管理 auth surface" 的一致性。与 {@code ApiTokenController} /
+ * {@code OidcBindingController} 同款 {@code isApiTokenAuth} guard。
  */
 @Slf4j
 @RestController
@@ -41,7 +46,11 @@ public class OidcProviderController {
     private PermissionService permissionService;
 
     @GetMapping
-    public RestBean<List<OidcProviderVO>> list(@RequestAttribute(Const.ATTR_USER_ROLE) String userRole) {
+    public RestBean<List<OidcProviderVO>> list(HttpServletRequest request,
+                                               @RequestAttribute(Const.ATTR_USER_ROLE) String userRole) {
+        if (isApiTokenAuth(request)) {
+            return RestBean.forbidden("不允许通过 API Token 管理 OIDC Provider");
+        }
         if (!permissionService.isAdmin(userRole)) {
             return RestBean.noPermission();
         }
@@ -49,8 +58,12 @@ public class OidcProviderController {
     }
 
     @PostMapping
-    public RestBean<OidcProviderVO> create(@RequestBody @Valid OidcProviderCreateVO vo,
+    public RestBean<OidcProviderVO> create(HttpServletRequest request,
+                                           @RequestBody @Valid OidcProviderCreateVO vo,
                                            @RequestAttribute(Const.ATTR_USER_ROLE) String userRole) {
+        if (isApiTokenAuth(request)) {
+            return RestBean.forbidden("不允许通过 API Token 管理 OIDC Provider");
+        }
         if (!permissionService.isAdmin(userRole)) {
             return RestBean.noPermission();
         }
@@ -58,9 +71,13 @@ public class OidcProviderController {
     }
 
     @PutMapping("/{id}")
-    public RestBean<OidcProviderVO> update(@PathVariable Long id,
+    public RestBean<OidcProviderVO> update(HttpServletRequest request,
+                                           @PathVariable Long id,
                                            @RequestBody @Valid OidcProviderUpdateVO vo,
                                            @RequestAttribute(Const.ATTR_USER_ROLE) String userRole) {
+        if (isApiTokenAuth(request)) {
+            return RestBean.forbidden("不允许通过 API Token 管理 OIDC Provider");
+        }
         if (!permissionService.isAdmin(userRole)) {
             return RestBean.noPermission();
         }
@@ -68,8 +85,12 @@ public class OidcProviderController {
     }
 
     @DeleteMapping("/{id}")
-    public RestBean<Void> delete(@PathVariable Long id,
+    public RestBean<Void> delete(HttpServletRequest request,
+                                 @PathVariable Long id,
                                  @RequestAttribute(Const.ATTR_USER_ROLE) String userRole) {
+        if (isApiTokenAuth(request)) {
+            return RestBean.forbidden("不允许通过 API Token 管理 OIDC Provider");
+        }
         if (!permissionService.isAdmin(userRole)) {
             return RestBean.noPermission();
         }
@@ -77,5 +98,10 @@ public class OidcProviderController {
             return RestBean.failure(404, "Provider 不存在");
         }
         return RestBean.success();
+    }
+
+    private boolean isApiTokenAuth(HttpServletRequest request) {
+        Object method = request.getAttribute(Const.ATTR_AUTH_METHOD);
+        return Const.AUTH_METHOD_API_TOKEN.equals(method);
     }
 }

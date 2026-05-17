@@ -29,6 +29,11 @@ public final class OidcLoginErrorCode {
     public static final String PROVIDER_DISABLED = "provider_disabled";
 
     /**
+     * P2-2：登录绑定流程中，(provider, subject) 已被其他账号占用。
+     */
+    public static final String OIDC_CONFLICT = "oidc_conflict";
+
+    /**
      * 其他不可恢复错误。
      */
     public static final String INTERNAL_ERROR = "internal_error";

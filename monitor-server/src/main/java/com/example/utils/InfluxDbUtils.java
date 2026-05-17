@@ -172,6 +172,74 @@ public class InfluxDbUtils {
     }
 
     /**
+     * 查询客户端最近 24 小时按 30 分钟切分的可用率桶序列。
+     *
+     * <p>实现思路（公开状态页方案 A，参考 {@code status-page-design.md} §2 / §5）：
+     * <ul>
+     *   <li>使用一次 Flux {@code aggregateWindow(every: 30m, fn: count, createEmpty: true)}
+     *       让 InfluxDB 直接补齐缺失桶；</li>
+     *   <li>过滤单一 {@code cpuUsage} field 避免多 field 产生多张表；</li>
+     *   <li>每个桶有数据点视为 1.0（在线），无数据点视为 0.0（离线）；</li>
+     *   <li>返回值长度恒为 {@link #BUCKET_COUNT_24H}（48），oldest → newest 顺序，
+     *       供前端绘制柱条；调用方据此计算总可用率（{@code sum / 48}）。</li>
+     * </ul>
+     *
+     * <p>所有 Influx 异常向上抛出由调用方决定降级策略（缓存兜底或返回 {@code null}）；
+     * 本工具类不在此处做断路器，因为 status page 是只读路径，{@link CircuitBreaker} 仅
+     * 守在写入路径以防写入阻塞采集流。
+     *
+     * @param clientId 客户端ID
+     * @return 48 个桶的可用率数组（0.0 或 1.0）；Influx 没有任何数据时返回长度为 0 的空数组
+     */
+    public double[] readAvailabilityBuckets(int clientId) {
+        String flux = String.format("""
+                from(bucket: "%s")
+                  |> range(start: -%dh)
+                  |> filter(fn: (r) => r["_measurement"] == "runtime")
+                  |> filter(fn: (r) => r["clientId"] == "%s")
+                  |> filter(fn: (r) => r["_field"] == "cpuUsage")
+                  |> aggregateWindow(every: %dm, fn: count, createEmpty: true)
+                """, bucket, AVAILABILITY_WINDOW_HOURS, clientId, BUCKET_MINUTES);
+        List<FluxTable> tables = client.getQueryApi().query(flux, organization);
+        if (tables.isEmpty()) {
+            return new double[0];
+        }
+        // 多 series 可能共享同一时间桶；按 _stop 时间合并取最大 count > 0
+        List<FluxRecord> records = tables.get(0).getRecords();
+        if (records.isEmpty()) {
+            return new double[0];
+        }
+        // aggregateWindow 返回的桶数量可能 ≥ BUCKET_COUNT_24H（边界向上取整），
+        // 截取最后 48 个，确保 oldest→newest 长度恒为 48。
+        int from = Math.max(0, records.size() - BUCKET_COUNT_24H);
+        double[] buckets = new double[BUCKET_COUNT_24H];
+        // 当 records 少于 48 时，前面填 0（表示该时间段尚未上线）
+        int offset = BUCKET_COUNT_24H - (records.size() - from);
+        for (int i = from; i < records.size(); i++) {
+            Object value = records.get(i).getValue();
+            long count = value instanceof Number n ? n.longValue() : 0L;
+            buckets[offset + (i - from)] = count > 0 ? 1.0 : 0.0;
+        }
+        return buckets;
+    }
+
+    /**
+     * 24 小时可用率窗口长度（小时）。
+     */
+    public static final int AVAILABILITY_WINDOW_HOURS = 24;
+
+    /**
+     * 单个桶的时长（分钟）。
+     */
+    public static final int BUCKET_MINUTES = 30;
+
+    /**
+     * 24 小时窗口下的桶总数（{@link #AVAILABILITY_WINDOW_HOURS} * 60 / {@link #BUCKET_MINUTES}）。
+     */
+    public static final int BUCKET_COUNT_24H =
+            AVAILABILITY_WINDOW_HOURS * 60 / BUCKET_MINUTES;
+
+    /**
      * 执行实际的 InfluxDB 写入。
      *
      * @param clientId 客户端ID

@@ -1,9 +1,13 @@
 package com.example.controller;
 
 import com.example.entity.RestBean;
+import com.example.entity.dto.Account;
 import com.example.entity.vo.request.ConfirmResetVO;
 import com.example.entity.vo.request.EmailResetVO;
+import com.example.entity.vo.response.AuthorizeVO;
+import com.example.mapper.struct.AccountStructMapper;
 import com.example.service.AccountService;
+import com.example.utils.Const;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.annotation.Resource;
@@ -27,6 +31,9 @@ public class AuthorizeController {
 
     @Resource
     AccountService accountService;
+
+    @Resource
+    AccountStructMapper accountStructMapper;
 
     /**
      * 请求邮件验证码
@@ -66,6 +73,34 @@ public class AuthorizeController {
     public RestBean<Void> resetPassword(@RequestBody @Valid EmailResetVO vo){
         return this.messageHandle(() ->
                 accountService.resetEmailAccountPassword(vo));
+    }
+
+    /**
+     * 获取当前登录用户信息。
+     *
+     * <p>P2-1：OIDC 登录回调后前端只拿到 JWT，没有 role/username/email，
+     * 立即调用本接口刷新 store；JwtFilter 已经把 accountId 写入请求属性，
+     * 这里直接据此查账号回填 VO。
+     *
+     * <p>不返回 token 字段（前端已持有）；如 token 失效会被 JwtFilter 401 拦在外层。
+     *
+     * @param accountId JwtFilter 写入的当前账号 ID
+     * @return 当前账号的 username / role / email
+     */
+    @GetMapping("/me")
+    @Operation(summary = "获取当前登录用户信息")
+    public RestBean<AuthorizeVO> currentUser(
+            @RequestAttribute(value = Const.ATTR_USER_ID, required = false) Integer accountId) {
+        // /api/auth/** permitAll，因此 JwtFilter 未写入 attr 即视为未登录
+        if (accountId == null) {
+            return RestBean.unauthorized("未登录");
+        }
+        Account account = accountService.getById(accountId);
+        if (account == null) {
+            return RestBean.failure(404, "账号不存在");
+        }
+        AuthorizeVO vo = accountStructMapper.toAuthorizeVO(account);
+        return RestBean.success(vo);
     }
 
     /**

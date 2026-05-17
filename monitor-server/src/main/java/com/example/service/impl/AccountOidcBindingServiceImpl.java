@@ -86,21 +86,38 @@ public class AccountOidcBindingServiceImpl
     /**
      * 幂等 upsert：(provider, subject) 已存在则刷新 email，否则插入新行。
      * 同账号同 provider 的不同 subject 不视为冲突（理论上 sub 唯一，但若 IdP 替换 sub 仍允许追加记录）。
+     *
+     * <p>对"被其他账号占用"的冲突情况静默忽略并写日志；需要感知冲突的调用方应改用
+     * {@link #bindIfFree(int, String, String, String)}。
      */
     @Override
     public void upsert(int accountId, String provider, String subject, String email) {
+        bindIfFree(accountId, provider, subject, email);
+    }
+
+    /**
+     * P2-2：显式返回 {@link BindingResult} 的绑定方法。
+     *
+     * <ul>
+     *   <li>(provider, subject) 未存在 → 新建行，返回 {@link BindingResult#CREATED}；</li>
+     *   <li>(provider, subject) 已属当前 accountId → 仅刷新 email，返回 {@link BindingResult#ALREADY_OWNED_BY_SELF}；</li>
+     *   <li>(provider, subject) 已属其他账号 → 不修改任何行，返回 {@link BindingResult#CONFLICT}。</li>
+     * </ul>
+     */
+    @Override
+    public BindingResult bindIfFree(int accountId, String provider, String subject, String email) {
         AccountOidcBinding existing = this.findByProviderSubject(provider, subject);
         if (existing != null) {
+            if (existing.getAccountId() != null && existing.getAccountId() != accountId) {
+                log.warn("OIDC 绑定 (provider={}, sub={}) 已被账号 {} 占用，当前请求账号 {} 被拒绝",
+                        provider, subject, existing.getAccountId(), accountId);
+                return BindingResult.CONFLICT;
+            }
             if (email != null && !email.equals(existing.getEmail())) {
                 existing.setEmail(email);
                 this.updateById(existing);
             }
-            // accountId 不一致是异常情况（同一 sub 被其他账号绑过）；记录日志便于排查
-            if (existing.getAccountId() != null && existing.getAccountId() != accountId) {
-                log.warn("OIDC 绑定 (provider={}, sub={}) 已被账号 {} 占用，当前请求账号 {} 将被忽略",
-                        provider, subject, existing.getAccountId(), accountId);
-            }
-            return;
+            return BindingResult.ALREADY_OWNED_BY_SELF;
         }
         AccountOidcBinding row = new AccountOidcBinding();
         row.setAccountId(accountId);
@@ -110,6 +127,7 @@ public class AccountOidcBindingServiceImpl
         row.setBoundAt(new Date());
         this.save(row);
         log.info("OIDC 绑定新建 accountId={} provider={}", accountId, provider);
+        return BindingResult.CREATED;
     }
 
     @Override

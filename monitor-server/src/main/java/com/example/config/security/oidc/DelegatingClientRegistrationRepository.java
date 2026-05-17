@@ -44,12 +44,15 @@ public class DelegatingClientRegistrationRepository implements ClientRegistratio
 
     private final OidcProviderService oidcProviderService;
     private final ObjectProvider<OAuth2ClientProperties> oauth2ClientPropertiesProvider;
+    private final OidcProperties oidcProperties;
     private final Cache<String, Map<String, ClientRegistration>> cache;
 
     public DelegatingClientRegistrationRepository(OidcProviderService oidcProviderService,
-                                                  ObjectProvider<OAuth2ClientProperties> oauth2ClientPropertiesProvider) {
+                                                  ObjectProvider<OAuth2ClientProperties> oauth2ClientPropertiesProvider,
+                                                  OidcProperties oidcProperties) {
         this.oidcProviderService = oidcProviderService;
         this.oauth2ClientPropertiesProvider = oauth2ClientPropertiesProvider;
+        this.oidcProperties = oidcProperties;
         this.cache = Caffeine.newBuilder()
                 .expireAfterWrite(Duration.ofMinutes(5))
                 .maximumSize(64)
@@ -83,11 +86,20 @@ public class DelegatingClientRegistrationRepository implements ClientRegistratio
 
     /**
      * 读取并合并 DB 与 yaml 来源；缓存命中时 O(1) 返回。
+     *
+     * <p>P1-2 修复：{@code monitor.oidc.enabled=false} 时直接返回空 Map 并缓存，
+     * 关闭 yaml / DB 全部 Provider，避免 {@code GET /oauth2/authorization/<name>} 仍可猜测命中。
+     * 这与 {@code OidcProviderPublicController} 的前端按钮过滤共同形成"全局 kill-switch"。
      */
     private Map<String, ClientRegistration> loadAll() {
         Map<String, ClientRegistration> cached = cache.getIfPresent(CACHE_KEY);
         if (cached != null) {
             return cached;
+        }
+        if (oidcProperties != null && !oidcProperties.isEnabled()) {
+            Map<String, ClientRegistration> empty = Map.of();
+            cache.put(CACHE_KEY, empty);
+            return empty;
         }
         Map<String, ClientRegistration> merged = new LinkedHashMap<>();
 

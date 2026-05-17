@@ -15,9 +15,14 @@ import org.springframework.context.annotation.Configuration;
 public class OidcProperties {
 
     /**
-     * 总开关。{@code false} 时仍提供 Provider CRUD（管理员可预配置），但 oauth2Login 链路实际不会路由命中。
-     * <p>当前 SecurityConfiguration 已无条件注册 {@code oauth2Login}，开关只通过 {@code /api/oidc/providers/public}
-     * 列表过滤来影响前端是否渲染按钮。
+     * 总开关（全局 kill-switch）。{@code false} 时：
+     * <ul>
+     *   <li>{@code /api/oidc/providers/public} 返回空数组，前端登录页不渲染按钮；</li>
+     *   <li>{@code DelegatingClientRegistrationRepository#findByRegistrationId} 返回 null，
+     *       Spring Security 让 {@code /oauth2/authorization/<any>} 直接 404，
+     *       阻断猜测 registrationId 启动 OAuth 流程的攻击面。</li>
+     * </ul>
+     * <p>关闭时 Provider CRUD 仍可用（管理员可预配置 IdP，再切换开关上线）。
      */
     private boolean enabled = false;
 
