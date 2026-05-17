@@ -498,6 +498,29 @@ class AlertEvaluatorImplTest {
         Assertions.assertNotNull(firing.getResolvedAt());
     }
 
+    /**
+     * 第四轮审查 P2 回归：SSE 推送的 AlertHistoryVO 必须填充 metric 与 ruleName，
+     * 否则前端 HistoryView 接收 alert-fired 事件后无法决定 currentValue 的展示单位
+     * （% vs KB/s），需刷新页面拿 GET API 才恢复。
+     */
+    @Test
+    void should_publish_sse_with_metric_and_rule_name() throws Exception {
+        rulesInDb.add(buildRule(28L, 1800, "network_up", "gt", 5000.0, 1));
+
+        // 先放一次满足阈值的样本进入窗口，等窗口跨度足够后再触发
+        evaluator.evaluate(1800, runtimeNetwork(8000.0, 0.0));
+        Thread.sleep(1100);
+        evaluator.evaluate(1800, runtimeNetwork(9000.0, 0.0));
+
+        Assertions.assertEquals(1, historyInDb.size(), "网络速率持续超阈值应触发告警");
+        Assertions.assertEquals(1, publishedSseAlerts.size(), "应通过 SseEventBus 推送 alert-fired 事件");
+        AlertHistoryVO vo = publishedSseAlerts.get(0);
+        Assertions.assertEquals("network_up", vo.getMetric(),
+                "SSE 推送的 VO 必须填充 metric，前端据此决定单位（% vs KB/s）");
+        Assertions.assertEquals("test-rule-28", vo.getRuleName(),
+                "SSE 推送的 VO 必须填充 ruleName，前端列表直接展示");
+    }
+
     // ====== helpers ======
 
     /**

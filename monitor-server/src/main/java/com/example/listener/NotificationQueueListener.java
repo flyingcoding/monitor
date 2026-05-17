@@ -61,6 +61,18 @@ public class NotificationQueueListener {
 
     /**
      * 消费告警事件并按 channelIds 路由发送。
+     * <p>
+     * 通道分类策略：
+     * <ul>
+     *   <li><b>attempted</b> = success + failed：实际触发 sender.send 调用的通道</li>
+     *   <li><b>skipped</b>：通道不存在 / 已禁用 / 类型未注册 sender —— 视为用户主动跳过的合法状态</li>
+     * </ul>
+     * ACK 策略：
+     * <ul>
+     *   <li>{@code attempted == 0}（所有通道被 skipped）→ 不抛异常，仅 WARN 提示</li>
+     *   <li>{@code attempted > 0 && success == 0}（尝试过但全失败）→ 抛 RuntimeException 触发 DLX</li>
+     *   <li>否则（至少一个成功）→ ACK</li>
+     * </ul>
      *
      * @param event 告警事件
      */
@@ -78,47 +90,57 @@ public class NotificationQueueListener {
 
         int total = channelIds.size();
         int success = 0;
-        int failure = 0;
+        int failed = 0;
+        int skipped = 0;
 
         for (Long channelId : channelIds) {
+            NotificationChannel channel = notificationChannelMapper.selectById(channelId);
+            if (channel == null) {
+                log.warn("通知通道不存在，已跳过，channelId={}", channelId);
+                skipped++;
+                continue;
+            }
+            if (Boolean.FALSE.equals(channel.getEnabled())) {
+                log.info("通知通道已禁用，跳过发送，channelId={}, name={}, type={}",
+                        channelId, channel.getName(), channel.getType());
+                skipped++;
+                continue;
+            }
+
+            NotificationChannelSender sender = sendersByType.get(channel.getType());
+            if (sender == null) {
+                log.error("不支持的通知通道类型，已跳过（无注册 sender），channelId={}, name={}, type={}",
+                        channelId, channel.getName(), channel.getType());
+                skipped++;
+                continue;
+            }
+
             try {
-                NotificationChannel channel = notificationChannelMapper.selectById(channelId);
-                if (channel == null) {
-                    log.warn("通知通道不存在，已跳过，channelId={}", channelId);
-                    failure++;
-                    continue;
-                }
-                if (Boolean.FALSE.equals(channel.getEnabled())) {
-                    log.info("通知通道已禁用，跳过发送，channelId={}, name={}, type={}",
-                            channelId, channel.getName(), channel.getType());
-                    continue;
-                }
-
-                NotificationChannelSender sender = sendersByType.get(channel.getType());
-                if (sender == null) {
-                    log.error("不支持的通知通道类型，channelId={}, name={}, type={}",
-                            channelId, channel.getName(), channel.getType());
-                    failure++;
-                    continue;
-                }
-
                 Map<String, Object> decrypted = decryptConfig(channel.getConfig());
                 sender.send(event, decrypted);
                 success++;
             } catch (Exception e) {
-                failure++;
+                failed++;
                 log.error("通知发送失败，channelId={}, ruleId={}, clientId={}, reason={}",
                         channelId, event.getRuleId(), event.getClientId(), e.getMessage(), e);
             }
         }
 
-        log.info("通知事件处理完成，ruleId={}, clientId={}, total={}, success={}, failure={}",
-                event.getRuleId(), event.getClientId(), total, success, failure);
+        int attempted = success + failed;
+        log.info("通知事件处理完成，ruleId={}, clientId={}, total={}, success={}, failed={}, skipped={}",
+                event.getRuleId(), event.getClientId(), total, success, failed, skipped);
 
-        // 全部失败才抛异常进入 DLX；否则视为部分成功并 ACK
-        if (success == 0 && failure == total) {
-            throw new RuntimeException("所有通知通道发送均失败，触发 DLX 路由");
+        if (attempted == 0) {
+            // 全部通道都被跳过：用户主动禁用所有通道或配置无效是合法状态，ACK 后告警仅落库不发外通知
+            log.warn("AlertEvent 所有通道均被跳过，未实际发送通知，ruleId={}, clientId={}, total={}",
+                    event.getRuleId(), event.getClientId(), total);
+            return;
         }
+        if (success == 0) {
+            // 尝试过但全失败：抛异常进入 DLX 触发重试
+            throw new RuntimeException("所有已尝试的通知通道发送均失败，触发 DLX 路由");
+        }
+        // 部分成功：ACK
     }
 
     /**

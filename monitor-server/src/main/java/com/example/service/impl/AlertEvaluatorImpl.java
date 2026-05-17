@@ -454,6 +454,9 @@ public class AlertEvaluatorImpl implements AlertEvaluator {
             AlertHistoryVO vo = alertStructMapper.toHistoryVO(history);
             if (rule != null) {
                 vo.setRuleName(rule.getName());
+                // metric 不在 alert_history 表中存储，SSE 推送时必须显式回填，
+                // 否则前端 HistoryView 直接插入列表后无法根据 metric 决定 currentValue 单位（% vs KB/s）。
+                vo.setMetric(rule.getMetric());
             }
             sseEventBus.publishAlertFired(vo);
         } catch (Exception e) {

@@ -22,7 +22,7 @@ const dialog = reactive({
 })
 
 const initialMailConfig = () => ({ to_addrs: '', subject_template: '' })
-const initialWebhookConfig = () => ({ url_enc: '', headers: '', body_template: '' })
+const initialWebhookConfig = () => ({ url_enc: '', headers_enc: '', body_template: '' })
 const initialDingtalkConfig = () => ({ webhook_url_enc: '', secret_enc: '', at_mobiles: '' })
 const initialFeishuConfig = () => ({ webhook_url_enc: '', secret_enc: '' })
 
@@ -110,17 +110,31 @@ function openEdit(row) {
 
 /**
  * 序列化表单 config，将逗号分隔字符串字段转换为对应后端可解析结构。
+ * <p>
+ * webhook 的 headers_enc 字段在前端以 JSON 字符串方式编辑（敏感，整体加密）。
+ * 提交前：
+ *   - 占位符 "***" 原样保留 → 后端 preserveExistingEnc 保留旧密文
+ *   - 空字符串原样保留 → 后端跳过加密
+ *   - 合法 JSON 解析为 Map 后由后端整体序列化加密
+ *   - 解析失败的字符串原样上送 → 后端 encryptSensitive 按字符串加密
  *
  * @returns {object} 已准备好上传的 config
  */
 function serializedConfig() {
   const cfg = { ...form.config }
-  // headers 字段允许 JSON 字符串，解析失败保留原值
-  if (form.type === 'webhook' && typeof cfg.headers === 'string' && cfg.headers.trim()) {
-    try {
-      cfg.headers = JSON.parse(cfg.headers)
-    } catch (_e) {
-      // 保持字符串，由后端校验
+  if (form.type === 'webhook') {
+    const raw = cfg.headers_enc
+    if (typeof raw === 'string') {
+      const trimmed = raw.trim()
+      if (trimmed === '' || trimmed === '***') {
+        cfg.headers_enc = trimmed
+      } else {
+        try {
+          cfg.headers_enc = JSON.parse(trimmed)
+        } catch (_e) {
+          // 保持字符串，由后端按字符串加密
+        }
+      }
     }
   }
   return cfg
@@ -325,11 +339,14 @@ onMounted(() => {
           </el-form-item>
           <el-form-item label="请求头">
             <el-input
-              v-model="form.config.headers"
+              v-model="form.config.headers_enc"
               type="textarea"
               rows="3"
-              placeholder='JSON 格式，例如：{"X-Token": "abc"}'
+              placeholder='JSON 格式（整体加密存储），例如：{"X-Token": "abc"}'
             />
+            <div style="color: var(--el-text-color-secondary); font-size: 12px; margin-top: 4px">
+              请求头将整体加密存储；编辑时显示 *** 表示沿用旧值，重新输入以覆盖。
+            </div>
           </el-form-item>
           <el-form-item label="请求体模板">
             <el-input

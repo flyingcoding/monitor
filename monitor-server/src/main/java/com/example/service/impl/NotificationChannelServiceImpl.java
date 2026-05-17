@@ -8,6 +8,7 @@ import com.example.mapper.AlertRuleMapper;
 import com.example.mapper.NotificationChannelMapper;
 import com.example.service.NotificationChannelService;
 import com.example.utils.CryptoUtils;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -28,6 +29,7 @@ public class NotificationChannelServiceImpl
 
     private static final String ENC_SUFFIX = "_enc";
     private static final String MASK_PLACEHOLDER = "***";
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     @Resource
     private AlertRuleMapper alertRuleMapper;
@@ -59,6 +61,10 @@ public class NotificationChannelServiceImpl
      * <p>
      * 已经被 {@link CryptoUtils#encrypt(String)} 加密过的值会被识别（带 {@code ENC:} 前缀），
      * 重复调用是幂等的。遮罩占位符 {@value #MASK_PLACEHOLDER} 不会被加密。
+     * <p>
+     * 非 String 类型的值（如 Map / List）会先用 Jackson 序列化为 JSON 字符串再加密，
+     * 解密侧需用同样的 ObjectMapper 反序列化为原结构。这样 webhook 的 {@code headers_enc}
+     * 等结构化敏感字段也能整体加密，避免逐键标记 _enc 的繁琐。
      *
      * @param config 通道配置 Map
      */
@@ -72,13 +78,23 @@ public class NotificationChannelServiceImpl
                 continue;
             }
             Object value = entry.getValue();
-            if (!(value instanceof String str) || str.isEmpty()) {
+            if (value == null) {
                 continue;
             }
-            if (MASK_PLACEHOLDER.equals(str)) {
-                continue;
+            if (value instanceof String str) {
+                if (str.isEmpty() || MASK_PLACEHOLDER.equals(str)) {
+                    continue;
+                }
+                entry.setValue(cryptoUtils.encrypt(str));
+            } else {
+                // 非字符串值：先 JSON 序列化为字符串再加密；解密侧负责反序列化
+                try {
+                    String serialized = OBJECT_MAPPER.writeValueAsString(value);
+                    entry.setValue(cryptoUtils.encrypt(serialized));
+                } catch (Exception e) {
+                    log.warn("通知通道字段 {} 序列化失败，跳过加密", key);
+                }
             }
-            entry.setValue(cryptoUtils.encrypt(str));
         }
     }
 

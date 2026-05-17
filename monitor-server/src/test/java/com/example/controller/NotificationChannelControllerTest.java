@@ -151,6 +151,49 @@ class NotificationChannelControllerTest {
     }
 
     /**
+     * 第四轮审查 P2 回归：_enc 字段值为 Map / 对象时（如 webhook 的 headers_enc），
+     * service 层应先 JSON 序列化为字符串再加密，避免内部 token 明文落库。
+     */
+    @Test
+    void createShouldSerializeAndEncryptObjectValuedEncField() throws Exception {
+        String payload = """
+                {
+                  "name": "webhook-with-headers",
+                  "type": "webhook",
+                  "enabled": true,
+                  "config": {
+                    "url": "https://hook.example.com",
+                    "headers_enc": {
+                      "X-Token": "sk-secret",
+                      "X-Source": "monitor"
+                    }
+                  }
+                }
+                """;
+
+        mockMvc.perform(post("/api/notification/channel")
+                        .contentType("application/json")
+                        .requestAttr(Const.ATTR_USER_ROLE, "admin")
+                        .content(payload))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200))
+                .andExpect(jsonPath("$.data.config.headers_enc").value("***"));
+
+        assertEquals(1, store.size());
+        NotificationChannel stored = store.values().iterator().next();
+        Object encStored = stored.getConfig().get("headers_enc");
+        assertNotNull(encStored);
+        assertTrue(encStored instanceof String, "Object 值序列化后应以 String 形式存入");
+        String enc = encStored.toString();
+        assertTrue(enc.startsWith("ENC:"), "Object 值应被加密为 ENC: 前缀的密文");
+        // 解密后应能反序列化为原 Map 结构
+        String decrypted = cryptoUtils.decrypt(enc);
+        com.fasterxml.jackson.databind.JsonNode parsed = new com.fasterxml.jackson.databind.ObjectMapper().readTree(decrypted);
+        assertEquals("sk-secret", parsed.get("X-Token").asText());
+        assertEquals("monitor", parsed.get("X-Source").asText());
+    }
+
+    /**
      * 更新通道时，传入 "***" 占位的 _enc 字段应保留旧密文，传入新明文则重新加密。
      */
     @Test

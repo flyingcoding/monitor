@@ -180,6 +180,67 @@ class WebhookNotificationChannelTest {
     }
 
     /**
+     * 第四轮审查 P2 回归：headers_enc（Listener 解密后为 JSON 字符串）应被解析并应用到 HTTP 请求头。
+     * <p>
+     * NotificationChannelServiceImpl.encryptSensitive 把 Map 序列化为 JSON 字符串后加密，
+     * Listener.decryptConfig 用 CryptoUtils.decrypt 还原为字符串。因此 sender 看到的 headers_enc
+     * 是 JSON 字符串，本通道需 readValue 为 Map 后逐项 add 到 HttpHeaders。
+     */
+    @Test
+    void should_apply_headers_from_headers_enc_json_string() throws Exception {
+        AlertEvent event = baseEvent();
+        Map<String, Object> config = new HashMap<>();
+        config.put("url", "https://hook.example.com/alert");
+        // 模拟 Listener 解密后的状态：headers_enc 为 JSON 字符串
+        config.put("headers_enc", "{\"X-Token\":\"sk-secret\",\"X-Source\":\"monitor\"}");
+
+        channel.send(event, config);
+
+        HttpHeaders headers = capturedEntity.get().getHeaders();
+        Assertions.assertEquals("sk-secret", headers.getFirst("X-Token"));
+        Assertions.assertEquals("monitor", headers.getFirst("X-Source"));
+    }
+
+    /**
+     * headers_enc 与 headers 同时存在时优先采用 headers_enc（敏感字段路径），
+     * 避免 fallback 路径泄漏旧明文配置。
+     */
+    @Test
+    void should_prefer_headers_enc_over_plain_headers() throws Exception {
+        AlertEvent event = baseEvent();
+        Map<String, Object> config = new HashMap<>();
+        config.put("url", "https://hook.example.com/alert");
+        Map<String, String> plain = new HashMap<>();
+        plain.put("X-Legacy", "legacy-value");
+        config.put("headers", plain);
+        config.put("headers_enc", "{\"X-Token\":\"sk-secret\"}");
+
+        channel.send(event, config);
+
+        HttpHeaders headers = capturedEntity.get().getHeaders();
+        Assertions.assertEquals("sk-secret", headers.getFirst("X-Token"),
+                "headers_enc 中的字段应被应用");
+        Assertions.assertNull(headers.getFirst("X-Legacy"),
+                "headers_enc 存在时不应再读 headers 明文路径");
+    }
+
+    /**
+     * headers_enc 为非法 JSON 时不应抛异常（仅 WARN 日志后跳过），避免阻断告警发送。
+     */
+    @Test
+    void should_skip_invalid_headers_enc_json() throws Exception {
+        AlertEvent event = baseEvent();
+        Map<String, Object> config = new HashMap<>();
+        config.put("url", "https://hook.example.com/alert");
+        config.put("headers_enc", "not-a-json-object");
+
+        Assertions.assertDoesNotThrow(() -> channel.send(event, config),
+                "headers_enc 解析失败不应阻断发送");
+        // 请求仍应被发出
+        Assertions.assertEquals("https://hook.example.com/alert", capturedUrl.get());
+    }
+
+    /**
      * 默认 body 在字段值含 JSON 特殊字符（{@code " \ \n}）时仍应生成合法 JSON，
      * 反序列化后字段值与原值完全一致 —— 防止字符串拼接式的注入隐患复活。
      */

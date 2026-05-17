@@ -2,6 +2,7 @@ package com.example.service.notification.impl;
 
 import com.example.entity.alert.AlertEvent;
 import com.example.service.notification.NotificationChannelSender;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
@@ -24,7 +25,10 @@ import java.util.Map;
  *   <li>{@code url}（明文）或 {@code url_enc}（CryptoUtils 加密，含 token 等敏感信息），二选一。</li>
  *   <li>{@code body_template}（可选）：JSON 字符串模板；占位符 {@code {key}} 会被 JSON 安全的字面量替换
  *       （字符串值会自动加引号并对特殊字符 {@code " \ \n} 等做转义）。未配置时使用默认 schema。</li>
- *   <li>{@code headers}（可选）：{@code Map<String,String>}，附加 HTTP 请求头。</li>
+ *   <li>{@code headers_enc}（推荐）：整个 headers Map 序列化后整体加密。
+ *       Listener 解密后值为 JSON 字符串（如 {@code "{\"X-Token\":\"sk-xxx\"}"}），本通道在使用前反序列化为 Map。</li>
+ *   <li>{@code headers}（兼容）：{@code Map<String,String>} 明文，仅用于向后兼容非敏感场景。
+ *       同时配置时优先使用 {@code headers_enc}。</li>
  *   <li>{@code method}（可选）：默认 POST，可配置为 PUT。</li>
  * </ul>
  * <p>
@@ -37,6 +41,8 @@ import java.util.Map;
 public class WebhookNotificationChannel implements NotificationChannelSender {
 
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    private static final TypeReference<Map<String, String>> HEADERS_TYPE =
+            new TypeReference<>() {};
 
     @Resource
     private RestTemplate restTemplate;
@@ -64,7 +70,13 @@ public class WebhookNotificationChannel implements NotificationChannelSender {
 
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
-        applyExtraHeaders(headers, config.get("headers"));
+        // 优先使用 headers_enc（已被 Listener 解密为 JSON 字符串），回退到明文 headers 兼容老配置
+        Object headersEnc = config.get("headers_enc");
+        if (headersEnc != null) {
+            applyEncryptedHeaders(headers, headersEnc);
+        } else {
+            applyExtraHeaders(headers, config.get("headers"));
+        }
 
         String methodName = stringConfig(config, "method", "POST").toUpperCase();
         HttpMethod httpMethod = "PUT".equals(methodName) ? HttpMethod.PUT : HttpMethod.POST;
@@ -172,6 +184,39 @@ public class WebhookNotificationChannel implements NotificationChannelSender {
                 continue;
             }
             headers.add(entry.getKey().toString(), entry.getValue().toString());
+        }
+    }
+
+    /**
+     * 将经过 {@code _enc} 解密后的 headers 值附加到 HttpHeaders。
+     * <p>
+     * 入参可能形态：
+     * <ul>
+     *   <li>JSON 字符串（{@link com.example.service.impl.NotificationChannelServiceImpl#encryptSensitive}
+     *       会把 Map 先 JSON 序列化为字符串再加密，解密后还原为字符串）</li>
+     *   <li>Map（兼容直接传 Map 的测试场景或老路径）</li>
+     * </ul>
+     * JSON 字符串解析失败时记 WARN 后跳过，避免影响主请求发送。
+     *
+     * @param headers 请求头容器
+     * @param raw     解密后的 headers 值
+     */
+    private static void applyEncryptedHeaders(HttpHeaders headers, Object raw) {
+        if (raw instanceof Map<?, ?>) {
+            applyExtraHeaders(headers, raw);
+            return;
+        }
+        if (raw instanceof String text) {
+            String trimmed = text.trim();
+            if (trimmed.isEmpty()) {
+                return;
+            }
+            try {
+                Map<String, String> parsed = OBJECT_MAPPER.readValue(trimmed, HEADERS_TYPE);
+                applyExtraHeaders(headers, parsed);
+            } catch (Exception e) {
+                log.warn("Webhook headers_enc 解析失败，跳过附加 headers，reason={}", e.getMessage());
+            }
         }
     }
 

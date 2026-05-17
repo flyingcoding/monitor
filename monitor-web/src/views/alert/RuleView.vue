@@ -201,8 +201,13 @@ function silenceRule(row) {
     cancelButtonText: '取消',
     inputType: 'number',
     inputValue: '60',
-    inputPattern: /^(?:[1-9]|[1-9][0-9]{1,3}|10080)$/,
-    inputErrorMessage: '请输入 1 ~ 10080 之间的整数'
+    inputValidator: (value) => {
+      const n = Number(value)
+      if (!Number.isInteger(n) || n < 1 || n > 10080) {
+        return '请输入 1 ~ 10080 之间的整数'
+      }
+      return true
+    }
   })
     .then(({ value }) => {
       silenceAlertRule(row.id, value, () => {
