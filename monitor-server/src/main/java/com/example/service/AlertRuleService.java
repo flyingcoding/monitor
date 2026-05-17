@@ -19,4 +19,20 @@ public interface AlertRuleService extends IService<AlertRule> {
      * @return 启用规则列表（包含全局规则）
      */
     List<AlertRule> listEnabledRules(Integer clientId);
+
+    /**
+     * 将该规则下所有处于活跃状态（firing / acknowledged）的告警历史批量标记为 resolved。
+     * <p>
+     * 使用场景：管理员修改了规则的关键属性（禁用 / 改作用域 / 改阈值或操作符 /
+     * 改持续时间）或删除规则。此时旧告警的语义已不再成立，但评估器主循环不会再遍历
+     * 不匹配的规则，无法走"持续不满足 → 自动 resolve"分支，从而导致告警长期挂在
+     * 活跃状态。需要在规则变更点显式批量收尾。
+     *
+     * @param ruleId        规则ID
+     * @param onlyClientId  仅 resolve 该客户端的活跃告警（适用于"作用域从单客户端变更"），
+     *                      {@code null} 表示该规则下所有客户端的活跃告警都 resolve
+     * @param reason        附加在 message 末尾的原因（中文），用于审计与前端排查
+     * @return 实际被 resolve 的历史条数
+     */
+    int resolveActivesByRule(Long ruleId, Integer onlyClientId, String reason);
 }

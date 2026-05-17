@@ -128,6 +128,35 @@ public class AlertWindowCache {
     }
 
     /**
+     * 移除指定规则在所有客户端上的窗口缓存与关联锁。
+     * <p>
+     * 使用场景：规则被更新（阈值 / 操作符 / 作用域 / 持续时间 / 启停）或删除时，
+     * 旧窗口里的样本对新规则语义已无意义，必须清空让评估器重新积累。
+     * <p>
+     * 实现按 key 前缀 {@code "r{ruleId}:"} 扫描，复杂度 O(n)；Caffeine 上限 10000 条
+     * 且 expireAfterAccess=1h，扫描成本可接受，避免维护额外索引。
+     *
+     * @param ruleId 规则ID
+     */
+    public void clearByRule(Long ruleId) {
+        if (ruleId == null) {
+            return;
+        }
+        String prefix = "r" + ruleId + ":";
+        // 收集后批量失效；不在迭代器上直接 invalidate 避免 ConcurrentModification 风险
+        java.util.List<String> toRemove = new java.util.ArrayList<>();
+        for (String key : cache.asMap().keySet()) {
+            if (key.startsWith(prefix)) {
+                toRemove.add(key);
+            }
+        }
+        for (String key : toRemove) {
+            cache.invalidate(key);
+        }
+        locks.keySet().removeIf(k -> k.startsWith(prefix));
+    }
+
+    /**
      * 获取与该 {@code (ruleId, clientId)} 关联的 entry-level 锁对象。
      * <p>
      * 调用方应在该锁上 {@code synchronized} 串行化"查活跃历史 → 创建 history → 投 MQ"段。
