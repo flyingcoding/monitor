@@ -116,6 +116,15 @@ const deleteProvider = (id, success, failure) =>
 const listBindings = (success, failure) => get('/api/oidc/bindings', success, failure)
 const unbindProvider = (provider, success, failure) =>
   del(`/api/oidc/bindings/${provider}`, success, failure)
+/**
+ * 申请一次性"绑定意图" token（P2-2）。
+ * 后端 5min TTL 关联当前 accountId；前端拿到后立刻跳转到 /api/oidc/bindings/start/{provider}?intent=...
+ *
+ * @param {Function} success 成功回调，参数为 { intentToken, ttlSeconds }
+ * @param {Function} failure 失败回调
+ */
+const issueBindingIntent = (success, failure) =>
+  post('/api/oidc/bindings/intent', {}, success, failure)
 
 export {
   listPublicProviders,
@@ -124,5 +133,6 @@ export {
   updateProvider,
   deleteProvider,
   listBindings,
-  unbindProvider
+  unbindProvider,
+  issueBindingIntent
 }

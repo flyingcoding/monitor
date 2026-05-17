@@ -135,8 +135,30 @@ function get(url, success, failure = defaultFailure) {
   internalGet(url, accessHeader(), success, failure)
 }
 
+/**
+ * P2-1：OIDC 回调拿到 JWT 后，前端需要回填 store.user。
+ * 调用 GET /api/auth/me 用现有 JWT 取 role/username/email。
+ * fetchSelf 失败时静默调用 fallback，调用方可选择跳转兜底页。
+ */
+function fetchSelf(success, failure = defaultFailure) {
+  internalGet(
+    '/api/auth/me',
+    accessHeader(),
+    (data) => {
+      const store = useStore()
+      if (data) {
+        store.user.role = data.role || ''
+        store.user.username = data.username || ''
+        store.user.email = data.email || ''
+      }
+      success(data)
+    },
+    failure
+  )
+}
+
 function unauthorized() {
   return !takeAccessToken()
 }
 
-export { post, get, login, logout, unauthorized, takeAccessToken }
+export { post, get, login, logout, unauthorized, takeAccessToken, fetchSelf }

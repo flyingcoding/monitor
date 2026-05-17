@@ -38,6 +38,12 @@ const router = createRouter({
           component: () => import('@/views/tabs/Security.vue')
         },
         {
+          path: 'status-page-config',
+          name: 'status-page-config',
+          component: () => import('@/views/tabs/StatusPageConfig.vue'),
+          meta: { adminOnly: true }
+        },
+        {
           path: 'alert',
           component: () => import('@/views/tabs/AlertView.vue'),
           redirect: { name: 'alert-history' },
@@ -62,11 +68,24 @@ const router = createRouter({
           ]
         }
       ]
+    },
+    // 公开状态页：v1.2 PRD R24/R25。独立顶级路由；未登录可访问；
+    // beforeEach 守卫看到 meta.public 时跳过登录检查。
+    {
+      path: '/status',
+      name: 'status-page',
+      component: () => import('@/views/StatusPage.vue'),
+      meta: { public: true }
     }
   ]
 })
 
 router.beforeEach((to, from, next) => {
+  // 公开路由（如 /status）直接放行，不参与登录态判断
+  if (to.meta && to.meta.public) {
+    next()
+    return
+  }
   const isUnauthorized = unauthorized()
   if (to.name && to.name.toString().startsWith('welcome') && !isUnauthorized) {
     next('/index')

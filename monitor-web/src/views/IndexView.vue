@@ -4,7 +4,7 @@
       <el-image src="icon.svg" style="height: 40px"></el-image>
       <div class="tabs">
         <tab-item
-          v-for="item in tabs"
+          v-for="item in visibleTabs"
           :key="item.id"
           :name="item.name"
           :active="item.id === tab"
@@ -58,7 +58,7 @@
 import { logout } from '@/net'
 import router from '@/router'
 import { Back, Moon, Sunny } from '@element-plus/icons-vue'
-import { onMounted, onBeforeUnmount, ref, watch } from 'vue'
+import { onMounted, onBeforeUnmount, ref, watch, computed } from 'vue'
 import { useDark } from '@vueuse/core'
 import { useRoute } from 'vue-router'
 import TabItem from '@/component/TabItem.vue'
@@ -74,7 +74,8 @@ const notificationStore = useNotificationStore()
 const tabs = [
   { id: 1, name: '管理', route: 'manage' },
   { id: 2, name: '安全', route: 'security' },
-  { id: 3, name: '告警', route: 'alert-history' }
+  { id: 3, name: '告警', route: 'alert-history' },
+  { id: 4, name: '状态页', route: 'status-page-config', adminOnly: true }
 ]
 
 /**
@@ -90,6 +91,11 @@ const defaultIndex = () => {
   return 1
 }
 const tab = ref(defaultIndex())
+
+/**
+ * 当前用户可见的 tab 列表。普通用户隐藏 adminOnly tab。
+ */
+const visibleTabs = computed(() => tabs.filter((t) => !t.adminOnly || store.isAdmin))
 
 watch(
   () => route.name,

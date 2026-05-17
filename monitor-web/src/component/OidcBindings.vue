@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
 import {
+  issueBindingIntent,
   listBindings,
   listPublicProviders,
   unbindProvider
@@ -39,12 +40,29 @@ function refresh() {
 }
 
 /**
- * 跳转到 OAuth2 授权端点；已登录态下 OIDC SuccessHandler 会落 binding 行而非新建账号。
+ * 跳转到 OAuth2 授权端点；P2-2 修复：
+ * 先调 POST /api/oidc/bindings/intent（JWT 鉴权）拿到一次性 intent token，
+ * 再跳到 /api/oidc/bindings/start/{provider}?intent=...，由后端把 accountId 写入 session
+ * 后再 302 到 /oauth2/authorization/{provider}。这样 OidcSuccessHandler 才能可靠区分
+ * "已登录绑定" vs "首次登录"（浏览器导航不携带 localStorage 的 JWT）。
  *
  * @param {string} providerName Provider name
  */
 function bindNew(providerName) {
-  window.location.href = `/oauth2/authorization/${encodeURIComponent(providerName)}`
+  issueBindingIntent(
+    (data) => {
+      const intent = data && data.intentToken
+      if (!intent) {
+        ElMessage.error('未能创建绑定凭据，请稍后再试')
+        return
+      }
+      const encoded = encodeURIComponent(providerName)
+      window.location.href = `/api/oidc/bindings/start/${encoded}?intentToken=${encodeURIComponent(intent)}`
+    },
+    () => {
+      // issueBindingIntent 内部已经通过 ElMessage 提示了错误
+    }
+  )
 }
 
 /**

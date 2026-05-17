@@ -63,20 +63,27 @@ function loadConfig() {
 }
 
 /**
- * 保存配置；mode === 'all' 时显式传 null，反之传选中的 id 数组（含空数组 = 明确隐藏所有）。
+ * 保存配置。
+ *
+ * P1-2：'all' 模式时显式提交当前候选客户端的全量 id 列表，
+ * 不能传 null —— 后端 P2-3 默认拒绝（null/未配置 ⇒ 不展示），
+ * 传 null 会导致状态页空白。'select' 模式按当前选中传（空数组 = 明确隐藏所有）。
+ *
+ * 已知权衡：保存后新注册的客户端不会自动出现在状态页，需要管理员重新打开页面并保存。
  */
 function saveConfig() {
   if (!formRef.value) return
   formRef.value.validate((valid) => {
     if (!valid) return
     saving.value = true
+    const allIds = (availableClients.value || []).map((c) => c.id).filter((id) => id != null)
     const payload = {
       title: form.title || '',
       subtitle: form.subtitle || '',
       brandColor: form.brandColor || '',
       logoUrl: form.logoUrl || '',
       enabled: form.enabled,
-      clientIds: form.mode === 'all' ? null : Array.from(form.selectedClientIds || [])
+      clientIds: form.mode === 'all' ? allIds : Array.from(form.selectedClientIds || [])
     }
     updateAdminConfig(
       payload,
@@ -161,6 +168,9 @@ onMounted(() => {
             <el-radio value="all">公开全部已注册客户端</el-radio>
             <el-radio value="select">自定义白名单</el-radio>
           </el-radio-group>
+          <div v-if="form.mode === 'all'" style="margin-top: 6px; font-size: 12px; color: grey">
+            保存时将提交当前 {{ availableClients.length }} 个候选客户端的 id；新注册的客户端需重新打开本页并保存才会公开。
+          </div>
         </el-form-item>
         <el-form-item v-if="form.mode === 'select'" label="选择客户端">
           <el-select
