@@ -448,4 +448,61 @@ class AlertRuleControllerTest {
                 "VO 不含 silenceUntil 字段，即便请求体显式传 null 也不应清空");
         assertEquals(originalSilence.getTime(), updated.getSilenceUntil().getTime());
     }
+
+    /**
+     * 回归：PUT 是完整编辑语义，clientId 显式传 null 应将规则从绑定单客户端改回"全局规则"。
+     * <p>
+     * 修复点（参见 AlertStructMapper.updateRule 移除 nullValuePropertyMappingStrategy=IGNORE）：
+     * 之前为防 silenceUntil 被清空，对整个 BeanMapping 启用 IGNORE，
+     * 副作用是 clientId 等所有 null 字段都不覆盖实体，用户在 UI 上把"客户端"下拉清空后
+     * 提交也无法把规则改回全局；现改为只针对 silenceUntil / id / createdAt / updatedAt 单独 ignore。
+     */
+    @Test
+    void updateShouldAllowChangingClientIdToNull() throws Exception {
+        Date originalSilence = new Date(System.currentTimeMillis() + 30 * 60_000L);
+        AlertRule rule = new AlertRule();
+        rule.setId(1L);
+        rule.setName("绑定主机");
+        rule.setClientId(5);
+        rule.setMetric("cpu");
+        rule.setOperator("gt");
+        rule.setThreshold(80.0);
+        rule.setDurationSec(60);
+        rule.setLevel("warning");
+        rule.setEnabled(true);
+        rule.setSilenceUntil(originalSilence);
+        rule.setCreatedAt(new Date());
+        rule.setUpdatedAt(new Date());
+        ruleStore.put(1L, rule);
+        idSeq.set(1);
+
+        // 用户把"客户端"下拉清空 → 请求体显式传 clientId: null
+        String payload = """
+                {
+                  "name": "改为全局",
+                  "clientId": null,
+                  "metric": "cpu",
+                  "operator": "gt",
+                  "threshold": 80,
+                  "durationSec": 60,
+                  "level": "warning",
+                  "enabled": true
+                }
+                """;
+        mockMvc.perform(put("/api/alert/rule/1")
+                        .contentType("application/json")
+                        .requestAttr(Const.ATTR_USER_ROLE, "ROLE_admin")
+                        .content(payload))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200));
+
+        AlertRule updated = ruleStore.get(1L);
+        assertEquals(null, updated.getClientId(),
+                "clientId 应当从 5 被清空为 null（全局规则），但实际仍为 " + updated.getClientId());
+        assertEquals("改为全局", updated.getName());
+        // 同时静默期不应被影响
+        assertNotNull(updated.getSilenceUntil(),
+                "silenceUntil 应保留，仅 clientId 被清空");
+        assertEquals(originalSilence.getTime(), updated.getSilenceUntil().getTime());
+    }
 }

@@ -270,6 +270,68 @@ class AlertHistoryControllerTest {
     }
 
     /**
+     * 列表接口应当从关联的 alert_rule 中读取 metric 并填充到 VO，
+     * 用于前端按指标决定数值单位（% / KB/s）。
+     */
+    @Test
+    void listShouldIncludeMetricFromRule() throws Exception {
+        AlertRule rule = new AlertRule();
+        rule.setId(20L);
+        rule.setName("CPU过高");
+        rule.setMetric("cpu");
+        rule.setOperator("gt");
+        rule.setThreshold(80.0);
+        rule.setDurationSec(60);
+        rule.setLevel("warning");
+        rule.setEnabled(true);
+        rule.setCreatedAt(new Date());
+        rule.setUpdatedAt(new Date());
+        ruleStore.put(20L, rule);
+
+        AlertHistory h = seedHistory(1L, 1001, "warning", "firing", new Date());
+        h.setRuleId(20L);
+
+        mockMvc.perform(get("/api/alert/history")
+                        .requestAttr(Const.ATTR_USER_ID, 100)
+                        .requestAttr(Const.ATTR_USER_ROLE, "ROLE_admin"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200))
+                .andExpect(jsonPath("$.data.records.length()").value(1))
+                .andExpect(jsonPath("$.data.records[0].metric").value("cpu"))
+                .andExpect(jsonPath("$.data.records[0].ruleName").value("CPU过高"));
+    }
+
+    /**
+     * 详情接口同样需要返回 metric，便于详情抽屉中按指标渲染单位。
+     */
+    @Test
+    void detailShouldIncludeMetric() throws Exception {
+        AlertRule rule = new AlertRule();
+        rule.setId(30L);
+        rule.setName("内存过高");
+        rule.setMetric("memory");
+        rule.setOperator("gt");
+        rule.setThreshold(90.0);
+        rule.setDurationSec(60);
+        rule.setLevel("critical");
+        rule.setEnabled(true);
+        rule.setCreatedAt(new Date());
+        rule.setUpdatedAt(new Date());
+        ruleStore.put(30L, rule);
+
+        AlertHistory h = seedHistory(1L, 1001, "critical", "firing", new Date());
+        h.setRuleId(30L);
+
+        mockMvc.perform(get("/api/alert/history/1")
+                        .requestAttr(Const.ATTR_USER_ID, 100)
+                        .requestAttr(Const.ATTR_USER_ROLE, "ROLE_admin"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200))
+                .andExpect(jsonPath("$.data.metric").value("memory"))
+                .andExpect(jsonPath("$.data.ruleName").value("内存过高"));
+    }
+
+    /**
      * ack 操作应更新状态、ackedBy、ackedAt。
      */
     @Test

@@ -95,11 +95,15 @@ public class AlertHistoryController {
         IPage<AlertHistory> result = alertHistoryService.queryHistory(allowed, clientId, level, status, from, to, page, size);
 
         List<AlertHistory> records = result.getRecords();
-        Map<Long, String> ruleNameCache = this.loadRuleNames(records);
+        Map<Long, AlertRule> ruleCache = this.loadRules(records);
         List<AlertHistoryVO> vos = records.stream().map(h -> {
             AlertHistoryVO vo = alertStructMapper.toHistoryVO(h);
             if (h.getRuleId() != null) {
-                vo.setRuleName(ruleNameCache.get(h.getRuleId()));
+                AlertRule rule = ruleCache.get(h.getRuleId());
+                if (rule != null) {
+                    vo.setRuleName(rule.getName());
+                    vo.setMetric(rule.getMetric());
+                }
             }
             return vo;
         }).toList();
@@ -126,9 +130,12 @@ public class AlertHistoryController {
                                            @RequestAttribute(Const.ATTR_USER_ROLE) String userRole) {
         AlertHistory history = this.requireHistoryWithPermission(id, userId, userRole);
         AlertHistoryVO vo = alertStructMapper.toHistoryVO(history);
-        AlertRule rule = alertRuleService.getById(history.getRuleId());
-        if (rule != null) {
-            vo.setRuleName(rule.getName());
+        if (history.getRuleId() != null) {
+            AlertRule rule = alertRuleService.getById(history.getRuleId());
+            if (rule != null) {
+                vo.setRuleName(rule.getName());
+                vo.setMetric(rule.getMetric());
+            }
         }
         return RestBean.success(vo);
     }
@@ -178,12 +185,13 @@ public class AlertHistoryController {
     }
 
     /**
-     * 加载历史记录涉及的所有规则名称，避免 N+1 查询。
+     * 加载历史记录涉及的所有规则实体，避免 N+1 查询。
+     * 返回 ruleId -> AlertRule 缓存，供调用方读取 name / metric 等字段。
      *
      * @param histories 历史列表
-     * @return ruleId -> name 缓存
+     * @return ruleId -> AlertRule 缓存
      */
-    private Map<Long, String> loadRuleNames(List<AlertHistory> histories) {
+    private Map<Long, AlertRule> loadRules(List<AlertHistory> histories) {
         if (histories.isEmpty()) {
             return Map.of();
         }
@@ -196,9 +204,9 @@ public class AlertHistoryController {
         if (ruleIds.isEmpty()) {
             return Map.of();
         }
-        Map<Long, String> cache = new HashMap<>();
+        Map<Long, AlertRule> cache = new HashMap<>();
         for (AlertRule rule : alertRuleService.listByIds(ruleIds)) {
-            cache.put(rule.getId(), rule.getName());
+            cache.put(rule.getId(), rule);
         }
         return cache;
     }

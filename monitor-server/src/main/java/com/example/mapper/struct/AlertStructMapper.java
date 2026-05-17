@@ -6,10 +6,8 @@ import com.example.entity.vo.request.AlertRuleCreateVO;
 import com.example.entity.vo.request.AlertRuleUpdateVO;
 import com.example.entity.vo.response.AlertHistoryVO;
 import com.example.entity.vo.response.AlertRuleVO;
-import org.mapstruct.BeanMapping;
 import org.mapstruct.Mapper;
 import org.mapstruct.Mapping;
-import org.mapstruct.NullValuePropertyMappingStrategy;
 
 /**
  * 告警规则与告警历史 DTO/VO 的编译期映射器。
@@ -37,25 +35,22 @@ public interface AlertStructMapper {
     AlertRule toRule(AlertRuleCreateVO vo);
 
     /**
-     * 将更新请求 VO 拷贝到已加载的规则实体上。
+     * 将更新请求 VO 拷贝到已加载的规则实体上（PUT 完整编辑语义）。
      * <p>
-     * 严格不可变字段：{@code id} / {@code createdAt} / {@code updatedAt} 由数据库或框架管理。
-     * <p>
-     * {@code silenceUntil} 显式 ignore（双保险）：
+     * 严格不可变字段：
      * <ul>
-     *   <li>{@link AlertRuleUpdateVO} 中已移除该字段（强约束）；</li>
-     *   <li>这里再次 ignore，确保即使后续有人重新加回字段或反序列化路径漏掉校验，
-     *       也不会把已有静默期被普通编辑/启停操作（toggleEnabled）清空。</li>
-     *   <li>静默期只能通过 {@code POST /api/alert/rule/{id}/silence} 端点修改。</li>
+     *   <li>{@code id} —— 来自路径参数，请求体不参与；</li>
+     *   <li>{@code createdAt} / {@code updatedAt} —— 由数据库或框架管理；</li>
+     *   <li>{@code silenceUntil} —— 静默期只能通过 {@code POST /api/alert/rule/{id}/silence}
+     *       端点修改。{@link AlertRuleUpdateVO} 中也已移除该字段作为双保险，
+     *       即便有人重新加回字段或反序列化路径漏掉校验，也不会把已有静默期被普通编辑/启停操作清空。</li>
      * </ul>
-     * 同时设置 {@code nullValuePropertyMappingStrategy=IGNORE}：
-     * 当前端任何字段未提交（null）时不要把已有值清空。这与 PATCH 语义一致，
-     * 适合启停开关 / 表单局部更新场景。
+     * 其余字段（含 {@code clientId} / {@code channelIds} 等）允许使用 null 覆盖目标，
+     * 以支持"客户端从指定主机改回全局规则"等清空语义。
      *
      * @param vo     更新请求 VO
      * @param target 目标实体（已通过 selectById 加载）
      */
-    @BeanMapping(nullValuePropertyMappingStrategy = NullValuePropertyMappingStrategy.IGNORE)
     @Mapping(target = "id", ignore = true)
     @Mapping(target = "createdAt", ignore = true)
     @Mapping(target = "updatedAt", ignore = true)
@@ -63,11 +58,12 @@ public interface AlertStructMapper {
     void updateRule(AlertRuleUpdateVO vo, @org.mapstruct.MappingTarget AlertRule target);
 
     /**
-     * 将告警历史实体映射为响应 VO。ruleName 在 controller 层填充。
+     * 将告警历史实体映射为响应 VO。ruleName / metric 在 controller 层根据 ruleId 反查 alert_rule 后填充。
      *
      * @param history 历史实体
      * @return 响应 VO
      */
     @Mapping(target = "ruleName", ignore = true)
+    @Mapping(target = "metric", ignore = true)
     AlertHistoryVO toHistoryVO(AlertHistory history);
 }
