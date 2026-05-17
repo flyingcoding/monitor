@@ -8,3 +8,8 @@ log
 /monitor-web/.env.production
 /.codex/**
 /AGENTS.md
+/.codex/
+/.claude/
+/.agents/
+/.cursor/
+/.trellis/

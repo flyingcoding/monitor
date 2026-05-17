@@ -482,10 +482,11 @@ P6 (可选)     SaaS 模式 → 合规与审计                                [
 
 | 表名 | 用途 | 关键字段（预估） |
 |------|------|---------|
-| `alert_rule` | 告警规则 | id, name, client_id, metric, operator, threshold, duration_sec, level, enabled |
-| `alert_history` | 告警历史 | id, rule_id, client_id, fired_at, resolved_at, status, level, message |
-| `notification_channel` | 通知通道配置 | id, type (mail/webhook/wechat/dingtalk/feishu/telegram), config (JSON), enabled |
-| `notification_rule` | 通道与规则绑定 | id, alert_rule_id, channel_id |
+| `alert_rule` | 告警规则 | id, name, client_id (NULL=全局), metric, operator, threshold, duration_sec, level, enabled, channel_ids (JSON 数组), silence_until, created_at, updated_at |
+| `alert_history` | 告警历史 | id, rule_id, client_id, fired_at, resolved_at, status (firing/resolved/acknowledged), level, current_value, message, acked_by, acked_at |
+| `notification_channel` | 通知通道配置 | id, name, type (mail/webhook/dingtalk/feishu), config (JSON，`_enc` 后缀字段 AES 加密), enabled, created_at |
+
+> v1.1 实施记录（2026-05-17）：实际落地为 **3 表 + JSON 字段**（D2 决策），未单独建 `notification_rule` 关联表；channel↔rule 多对多关系通过 `alert_rule.channel_ids` JSON 数组承载。Flyway 迁移 `V2__alert.sql`。MVP 通道：邮件 / Webhook / 钉钉 / 飞书（D1 决策，企业微信 / Telegram 推迟到 v1.1.x patch）。
 
 ### v1.2 计划新增
 
