@@ -10,8 +10,10 @@ import com.example.entity.alert.AlertStatus;
 import com.example.entity.dto.AlertHistory;
 import com.example.entity.dto.AlertRule;
 import com.example.entity.dto.Client;
+import com.example.entity.dto.ClientDetail;
 import com.example.entity.vo.request.RuntimeDetailVO;
 import com.example.entity.vo.response.AlertHistoryVO;
+import com.example.mapper.ClientDetailMapper;
 import com.example.mapper.struct.AlertStructMapper;
 import com.example.service.AlertEvaluator;
 import com.example.service.AlertHistoryService;
@@ -78,6 +80,9 @@ public class AlertEvaluatorImpl implements AlertEvaluator {
     @Resource
     private AlertStructMapper alertStructMapper;
 
+    @Resource
+    private ClientDetailMapper clientDetailMapper;
+
     /**
      * 异步评估当前客户端的实时指标是否触发任何启用规则。
      * <p>
@@ -98,12 +103,31 @@ public class AlertEvaluatorImpl implements AlertEvaluator {
             if (rules.isEmpty()) {
                 return;
             }
+            // 在入口处一次性加载 ClientDetail，避免每条规则评估时 N+1 查询
+            ClientDetail clientDetail = loadClientDetail(clientId);
             Date now = new Date();
             for (AlertRule rule : rules) {
-                evaluateRule(rule, clientId, runtime, now);
+                evaluateRule(rule, clientId, runtime, clientDetail, now);
             }
         } catch (Exception e) {
             log.warn("告警评估异常 clientId={}, reason={}", clientId, e.getMessage());
+        }
+    }
+
+    /**
+     * 安全加载客户端静态详情（含总内存 / 总磁盘），用于把 GB 用量换算为百分比。
+     * <p>
+     * 查询失败时返回 null，对应指标无法归一为百分比则跳过评估（避免错误告警）。
+     *
+     * @param clientId 客户端ID
+     * @return 客户端详情，加载失败时返回 null
+     */
+    private ClientDetail loadClientDetail(Integer clientId) {
+        try {
+            return clientDetailMapper.selectById(clientId);
+        } catch (Exception e) {
+            log.warn("加载客户端详情失败 clientId={}, reason={}", clientId, e.getMessage());
+            return null;
         }
     }
 
@@ -130,12 +154,14 @@ public class AlertEvaluatorImpl implements AlertEvaluator {
      * 触发/恢复段以 (ruleId, clientId) 级锁串行化，避免虚拟线程并发评估时
      * 重复创建 firing 历史，或一边创建一边 resolve 形成竞态。
      *
-     * @param rule     告警规则
-     * @param clientId 客户端ID
-     * @param runtime  实时指标
-     * @param now      本次评估时间
+     * @param rule         告警规则
+     * @param clientId     客户端ID
+     * @param runtime      实时指标
+     * @param clientDetail 客户端静态详情（含总内存 / 总磁盘），可能为 null
+     * @param now          本次评估时间
      */
-    private void evaluateRule(AlertRule rule, Integer clientId, RuntimeDetailVO runtime, Date now) {
+    private void evaluateRule(AlertRule rule, Integer clientId, RuntimeDetailVO runtime,
+                              ClientDetail clientDetail, Date now) {
         if (isSilenced(rule, now)) {
             return;
         }
@@ -146,7 +172,13 @@ public class AlertEvaluatorImpl implements AlertEvaluator {
                     rule.getId(), rule.getMetric(), rule.getOperator());
             return;
         }
-        Double currentValue = extractMetricValue(metric, runtime);
+        Double currentValue = extractMetricValue(metric, runtime, clientDetail);
+        if (currentValue == null) {
+            // 内存/磁盘百分比需要 ClientDetail 总量；缺失时跳过本规则评估，避免误告警
+            log.debug("跳过规则评估（缺少客户端总量数据） ruleId={}, clientId={}, metric={}",
+                    rule.getId(), clientId, rule.getMetric());
+            return;
+        }
         boolean met = operator.test(currentValue, rule.getThreshold());
         int durationSec = rule.getDurationSec() == null ? 60 : rule.getDurationSec();
         windowCache.record(rule.getId(), clientId, met, durationSec);
@@ -175,20 +207,50 @@ public class AlertEvaluatorImpl implements AlertEvaluator {
     }
 
     /**
-     * 从实时指标 VO 中取出对应指标的数值。
+     * 从实时指标 VO 中取出对应指标的数值，并按规则阈值的语义归一为可比较的单位。
+     * <p>
+     * 客户端实际上报的语义（参见 {@code MonitorUtils.monitorRuntimeDetail}）：
+     * <ul>
+     *   <li>{@code cpuUsage}：0~1 的比例数（如 0.9 = 90%）</li>
+     *   <li>{@code memoryUsage}：已用内存（GB）</li>
+     *   <li>{@code diskUsage}：已用磁盘（GB）</li>
+     *   <li>{@code networkUpload} / {@code networkDownload}：速率（KB/s）</li>
+     * </ul>
+     * 前端在 {@code RuleView.vue} 中以百分比形式配置 CPU / 内存 / 磁盘的阈值（0~100），
+     * 因此评估时需要把上报值统一换算为百分比再与阈值比较；网络指标保留 KB/s 原始单位。
      *
-     * @param metric  指标枚举
-     * @param runtime 实时指标 VO
-     * @return 指标值
+     * @param metric       指标枚举
+     * @param runtime      实时指标 VO
+     * @param clientDetail 客户端静态详情（提供总内存 / 总磁盘），可能为 null
+     * @return 与规则阈值同单位的当前值，无法计算时返回 null
      */
-    private Double extractMetricValue(AlertMetric metric, RuntimeDetailVO runtime) {
+    private Double extractMetricValue(AlertMetric metric, RuntimeDetailVO runtime, ClientDetail clientDetail) {
         return switch (metric) {
-            case CPU -> runtime.getCpuUsage();
-            case MEMORY -> runtime.getMemoryUsage();
-            case DISK -> runtime.getDiskUsage();
+            // 0~1 -> 0~100 百分比
+            case CPU -> runtime.getCpuUsage() * 100.0;
+            // 已用 GB -> 百分比；缺总量时返回 null 跳过
+            case MEMORY -> toPercent(runtime.getMemoryUsage(),
+                    clientDetail == null ? 0.0 : clientDetail.getMemory());
+            case DISK -> toPercent(runtime.getDiskUsage(),
+                    clientDetail == null ? 0.0 : clientDetail.getDisk());
+            // 网络速率保留 KB/s 原始单位，不做归一
             case NETWORK_UP -> runtime.getNetworkUpload();
             case NETWORK_DOWN -> runtime.getNetworkDownload();
         };
+    }
+
+    /**
+     * 将"已用量 / 总量"换算为百分比，总量缺失或不合法时返回 null。
+     *
+     * @param used  已用量
+     * @param total 总量
+     * @return 百分比 (0~100+)，无法计算时返回 null
+     */
+    private Double toPercent(double used, double total) {
+        if (total <= 0.0) {
+            return null;
+        }
+        return used / total * 100.0;
     }
 
     /**

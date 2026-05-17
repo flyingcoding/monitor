@@ -347,4 +347,105 @@ class AlertRuleControllerTest {
                         .requestAttr(Const.ATTR_USER_ROLE, "ROLE_admin"))
                 .andExpect(status().isBadRequest());
     }
+
+    /**
+     * 回归：更新规则（编辑、启停开关）不应清空 silenceUntil。
+     * <p>
+     * 修复点（参见 AlertRuleUpdateVO + AlertStructMapper.updateRule 的 ignore 注解）：
+     * 之前 update 把 vo.silenceUntil=null 通过 MapStruct 覆盖到 entity，导致已设置的静默期
+     * 被普通编辑误清；现在 VO 中已移除该字段、mapper 也 ignore，DB 中 silenceUntil 应保持原值。
+     */
+    @Test
+    void updateShouldNotClearSilenceUntil() throws Exception {
+        Date originalSilence = new Date(System.currentTimeMillis() + 30 * 60_000L);
+        AlertRule rule = new AlertRule();
+        rule.setId(1L);
+        rule.setName("旧名称");
+        rule.setMetric("cpu");
+        rule.setOperator("gt");
+        rule.setThreshold(80.0);
+        rule.setDurationSec(60);
+        rule.setLevel("warning");
+        rule.setEnabled(true);
+        rule.setSilenceUntil(originalSilence);
+        rule.setCreatedAt(new Date());
+        rule.setUpdatedAt(new Date());
+        ruleStore.put(1L, rule);
+        idSeq.set(1);
+
+        // 普通编辑请求：完全不含 silenceUntil 字段
+        String payload = """
+                {
+                  "name": "新名称",
+                  "metric": "memory",
+                  "operator": "gte",
+                  "threshold": 70,
+                  "durationSec": 120,
+                  "level": "warning",
+                  "enabled": false
+                }
+                """;
+        mockMvc.perform(put("/api/alert/rule/1")
+                        .contentType("application/json")
+                        .requestAttr(Const.ATTR_USER_ROLE, "ROLE_admin")
+                        .content(payload))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200));
+
+        AlertRule updated = ruleStore.get(1L);
+        assertNotNull(updated.getSilenceUntil(), "silenceUntil 不应被普通编辑清空");
+        assertEquals(originalSilence.getTime(), updated.getSilenceUntil().getTime(),
+                "silenceUntil 应保留原值，实际 " + updated.getSilenceUntil());
+        // 其它字段确实更新
+        assertEquals("新名称", updated.getName());
+        assertEquals("memory", updated.getMetric());
+        assertEquals(false, updated.getEnabled());
+    }
+
+    /**
+     * 回归：即使请求体包含 silenceUntil 字段，反序列化也不应应用到实体（VO 已无该字段）。
+     */
+    @Test
+    void updateShouldIgnoreSilenceUntilEvenIfSentByClient() throws Exception {
+        Date originalSilence = new Date(System.currentTimeMillis() + 30 * 60_000L);
+        AlertRule rule = new AlertRule();
+        rule.setId(1L);
+        rule.setName("旧名称");
+        rule.setMetric("cpu");
+        rule.setOperator("gt");
+        rule.setThreshold(80.0);
+        rule.setDurationSec(60);
+        rule.setLevel("warning");
+        rule.setEnabled(true);
+        rule.setSilenceUntil(originalSilence);
+        rule.setCreatedAt(new Date());
+        rule.setUpdatedAt(new Date());
+        ruleStore.put(1L, rule);
+        idSeq.set(1);
+
+        // 客户端尝试通过 update 请求体清空 silenceUntil
+        String payload = """
+                {
+                  "name": "新名称",
+                  "metric": "cpu",
+                  "operator": "gt",
+                  "threshold": 80,
+                  "durationSec": 60,
+                  "level": "warning",
+                  "enabled": true,
+                  "silenceUntil": null
+                }
+                """;
+        mockMvc.perform(put("/api/alert/rule/1")
+                        .contentType("application/json")
+                        .requestAttr(Const.ATTR_USER_ROLE, "ROLE_admin")
+                        .content(payload))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200));
+
+        AlertRule updated = ruleStore.get(1L);
+        assertNotNull(updated.getSilenceUntil(),
+                "VO 不含 silenceUntil 字段，即便请求体显式传 null 也不应清空");
+        assertEquals(originalSilence.getTime(), updated.getSilenceUntil().getTime());
+    }
 }

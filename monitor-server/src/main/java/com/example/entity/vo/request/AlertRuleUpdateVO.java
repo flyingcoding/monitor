@@ -10,11 +10,14 @@ import jakarta.validation.constraints.Pattern;
 import lombok.Data;
 import org.hibernate.validator.constraints.Length;
 
-import java.util.Date;
 import java.util.List;
 
 /**
  * 告警规则更新请求VO。id 通过路径参数传递，不在请求体中。
+ * <p>
+ * 不含 {@code silenceUntil} 字段：静默时间只允许通过专用端点
+ * {@code POST /api/alert/rule/{id}/silence?minutes=N} 修改，避免普通编辑/启停
+ * 误传 null 把活跃静默期清空（参见 AlertStructMapper.updateRule 的 ignore 配置作为双保险）。
  */
 @Data
 public class AlertRuleUpdateVO {
@@ -43,5 +46,4 @@ public class AlertRuleUpdateVO {
     @NotNull
     Boolean enabled;
     List<Long> channelIds;
-    Date silenceUntil;
 }

@@ -4,9 +4,11 @@ import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import org.springframework.stereotype.Component;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayDeque;
 import java.util.Deque;
+import java.util.Iterator;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.TimeUnit;
@@ -84,27 +86,33 @@ public class AlertWindowCache {
     }
 
     /**
-     * 判断窗口内是否持续满足条件：所有样本 met=true，且最早样本时间距今 >= durationSec。
+     * 判断窗口"最新一段连续 met=true"的时间跨度是否 >= durationSec。
+     * <p>
+     * 关键语义：只看从最新样本向前的连续段，不要求整窗口全为 true。
+     * 这样状态翻转（false…false, true, true,…）后只要连续 true 段累计够 durationSec
+     * 就会触发，不必等到旧 false 样本被裁剪。
      *
      * @param ruleId      规则ID
      * @param clientId    客户端ID
      * @param durationSec 规则要求的持续秒数
-     * @return 持续满足返回 true
+     * @return 最近连续 met=true 段跨度 >= durationSec 时返回 true
      */
     public boolean isContinuouslyMet(Long ruleId, Integer clientId, int durationSec) {
-        return isContinuously(ruleId, clientId, durationSec, true);
+        return isLatestSegment(ruleId, clientId, durationSec, true);
     }
 
     /**
-     * 判断窗口内是否持续不满足条件：所有样本 met=false，且最早样本时间距今 >= durationSec。
+     * 判断窗口"最新一段连续 met=false"的时间跨度是否 >= durationSec。
+     * <p>
+     * 镜像于 {@link #isContinuouslyMet}：用于触发自动 resolve。
      *
      * @param ruleId      规则ID
      * @param clientId    客户端ID
      * @param durationSec 规则要求的持续秒数
-     * @return 持续不满足返回 true
+     * @return 最近连续 met=false 段跨度 >= durationSec 时返回 true
      */
     public boolean isContinuouslyNotMet(Long ruleId, Integer clientId, int durationSec) {
-        return isContinuously(ruleId, clientId, durationSec, false);
+        return isLatestSegment(ruleId, clientId, durationSec, false);
     }
 
     /**
@@ -134,16 +142,24 @@ public class AlertWindowCache {
     }
 
     /**
-     * 评估窗口内样本是否全部为指定的 {@code expected} 状态，且窗口跨度 >= durationSec。
-     * 与 {@link #record} 共用 entry-level 锁，遍历过程中不会被并发 record 改写。
+     * 从最新样本向前找出"最近一段连续状态为 {@code expected} 的样本"的起点，
+     * 判断该段时间跨度是否 >= durationSec。
+     * <p>
+     * 算法：反向遍历样本队列：
+     * <ol>
+     *   <li>遇到 {@code met != expected} 的样本立即中断；</li>
+     *   <li>否则记录当前样本作为段起点候选；</li>
+     *   <li>遍历完成后用 (latestTs - startTs) 判断跨度。</li>
+     * </ol>
+     * 与 {@link #record} 共享 entry-level 锁，避免遍历时被并发 record 修改。
      *
      * @param ruleId      规则ID
      * @param clientId    客户端ID
      * @param durationSec 持续秒数
-     * @param expected    期望状态
+     * @param expected    期望状态（true=持续触发，false=持续恢复）
      * @return 满足条件返回 true
      */
-    private boolean isContinuously(Long ruleId, Integer clientId, int durationSec, boolean expected) {
+    private boolean isLatestSegment(Long ruleId, Integer clientId, int durationSec, boolean expected) {
         Deque<EvalSample> samples = cache.getIfPresent(windowKey(ruleId, clientId));
         if (samples == null) {
             return false;
@@ -152,21 +168,22 @@ public class AlertWindowCache {
             if (samples.isEmpty()) {
                 return false;
             }
-            EvalSample first = samples.peekFirst();
             EvalSample last = samples.peekLast();
-            if (first == null || last == null) {
+            if (last == null || last.met() != expected) {
+                // 最新样本与期望状态不一致 → 最近一段连续 expected 段为空
                 return false;
             }
-            long spanMs = last.ts().toEpochMilli() - first.ts().toEpochMilli();
-            if (spanMs < Math.max(durationSec, 1) * 1000L) {
-                return false;
-            }
-            for (EvalSample s : samples) {
+            Instant segmentStart = last.ts();
+            Iterator<EvalSample> it = samples.descendingIterator();
+            while (it.hasNext()) {
+                EvalSample s = it.next();
                 if (s.met() != expected) {
-                    return false;
+                    break;
                 }
+                segmentStart = s.ts();
             }
-            return true;
+            long spanSec = Duration.between(segmentStart, last.ts()).toSeconds();
+            return spanSec >= Math.max(durationSec, 1);
         }
     }
 

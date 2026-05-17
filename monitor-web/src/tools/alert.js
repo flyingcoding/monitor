@@ -16,13 +16,19 @@ const ALERT_STATUSES = [
   { value: 'acknowledged', label: '已确认', type: 'info' }
 ]
 
-/** 监控指标元数据，与后端 AlertMetric 枚举一致。 */
+/** 监控指标元数据，与后端 AlertMetric 枚举一致。
+ *
+ * 单位说明（与后端 AlertEvaluatorImpl.extractMetricValue 对齐）：
+ * - CPU / 内存 / 磁盘：阈值按百分比配置（0~100），后端会把客户端上报的原始值
+ *   （cpuUsage 0~1 比例、memoryUsage GB 已用量、diskUsage GB 已用量）归一为百分比。
+ * - 网络上下行：阈值按速率 KB/s 配置，与客户端上报值同单位，不做归一。
+ */
 const ALERT_METRICS = [
   { value: 'cpu', label: 'CPU 使用率', unit: '%', max: 100 },
   { value: 'memory', label: '内存使用率', unit: '%', max: 100 },
   { value: 'disk', label: '磁盘使用率', unit: '%', max: 100 },
-  { value: 'network_up', label: '网络上行 (KB/s)', unit: 'KB/s', max: 1000000 },
-  { value: 'network_down', label: '网络下行 (KB/s)', unit: 'KB/s', max: 1000000 }
+  { value: 'network_up', label: '网络上行速率', unit: 'KB/s', max: 1000000 },
+  { value: 'network_down', label: '网络下行速率', unit: 'KB/s', max: 1000000 }
 ]
 
 /** 比较运算符元数据。 */

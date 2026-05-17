@@ -55,7 +55,20 @@ const validationRules = {
   ],
   metric: [{ required: true, message: '请选择监控指标', trigger: 'change' }],
   operator: [{ required: true, message: '请选择比较运算符', trigger: 'change' }],
-  threshold: [{ required: true, type: 'number', message: '请输入阈值', trigger: 'blur' }],
+  threshold: [
+    { required: true, type: 'number', message: '请输入阈值', trigger: 'blur' },
+    {
+      validator: (_r, value, cb) => {
+        const meta = metricSelected.value
+        if (meta.unit === '%' && (value < 0 || value > 100)) {
+          cb(new Error('百分比阈值需在 0 ~ 100 之间'))
+          return
+        }
+        cb()
+      },
+      trigger: 'blur'
+    }
+  ],
   durationSec: [
     { required: true, type: 'number', message: '请输入持续时间', trigger: 'blur' },
     {
@@ -418,7 +431,7 @@ onMounted(() => {
             />
           </el-select>
         </el-form-item>
-        <el-form-item label="阈值" prop="threshold">
+        <el-form-item :label="`阈值 (${metricSelected.unit})`" prop="threshold">
           <el-input-number
             v-model="form.threshold"
             :min="0"
@@ -426,7 +439,9 @@ onMounted(() => {
             :precision="metricSelected.unit === '%' ? 1 : 0"
             style="width: 100%"
           />
-          <span style="margin-left: 10px; color: grey">{{ metricSelected.unit }}</span>
+          <span style="margin-left: 10px; color: grey">
+            {{ metricSelected.unit === '%' ? '百分比 0~100' : '原始单位 KB/s' }}
+          </span>
         </el-form-item>
         <el-form-item label="持续时间" prop="durationSec">
           <el-input-number

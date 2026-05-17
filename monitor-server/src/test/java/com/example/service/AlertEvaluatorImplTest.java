@@ -8,8 +8,10 @@ import com.example.entity.alert.AlertStatus;
 import com.example.entity.dto.AlertHistory;
 import com.example.entity.dto.AlertRule;
 import com.example.entity.dto.Client;
+import com.example.entity.dto.ClientDetail;
 import com.example.entity.vo.request.RuntimeDetailVO;
 import com.example.entity.vo.response.AlertHistoryVO;
+import com.example.mapper.ClientDetailMapper;
 import com.example.mapper.struct.AlertStructMapper;
 import com.example.service.impl.AlertEvaluatorImpl;
 import com.example.service.impl.AlertWindowCache;
@@ -23,7 +25,9 @@ import org.springframework.test.util.ReflectionTestUtils;
 import java.lang.reflect.Proxy;
 import java.util.ArrayList;
 import java.util.Date;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CountDownLatch;
@@ -49,6 +53,8 @@ class AlertEvaluatorImplTest {
     private final ConcurrentLinkedQueue<Object> publishedMessages = new ConcurrentLinkedQueue<>();
     private final List<AlertHistoryVO> publishedSseAlerts = new ArrayList<>();
     private final AtomicReference<Long> historyIdSequence = new AtomicReference<>(1L);
+    /** 每个 clientId 对应的 ClientDetail，控制单位归一所需的总内存/总磁盘。 */
+    private final Map<Integer, ClientDetail> clientDetailsInDb = new HashMap<>();
 
     /**
      * 装配 evaluator 与所有桩对象。
@@ -60,6 +66,7 @@ class AlertEvaluatorImplTest {
         publishedMessages.clear();
         publishedSseAlerts.clear();
         historyIdSequence.set(1L);
+        clientDetailsInDb.clear();
 
         evaluator = new AlertEvaluatorImpl();
         windowCache = new AlertWindowCache();
@@ -70,6 +77,7 @@ class AlertEvaluatorImplTest {
         ClientService clientService = stubClientService();
         SseEventBus sseEventBus = stubSseEventBus();
         AlertStructMapper alertStructMapper = stubAlertStructMapper();
+        ClientDetailMapper clientDetailMapper = stubClientDetailMapper();
 
         ReflectionTestUtils.setField(evaluator, "alertRuleService", alertRuleService);
         ReflectionTestUtils.setField(evaluator, "alertHistoryService", alertHistoryService);
@@ -78,14 +86,17 @@ class AlertEvaluatorImplTest {
         ReflectionTestUtils.setField(evaluator, "windowCache", windowCache);
         ReflectionTestUtils.setField(evaluator, "sseEventBus", sseEventBus);
         ReflectionTestUtils.setField(evaluator, "alertStructMapper", alertStructMapper);
+        ReflectionTestUtils.setField(evaluator, "clientDetailMapper", clientDetailMapper);
     }
 
     /**
      * 持续超过阈值满足 durationSec 时应触发告警，产生 firing 历史并投通知。
+     * <p>
+     * 阈值按百分比表达（80 = 80%）；客户端上报的 cpuUsage=0.9 在评估器内归一为 90% 后参与比较。
      */
     @Test
     void should_fire_when_continuously_above_threshold() throws Exception {
-        rulesInDb.add(buildRule(1L, 100, "cpu", "gt", 0.8, 2));
+        rulesInDb.add(buildRule(1L, 100, "cpu", "gt", 80.0, 2));
 
         // 第一次评估：满足阈值，窗口跨度不够 → 不触发
         evaluator.evaluate(100, runtime(0.9));
@@ -108,6 +119,10 @@ class AlertEvaluatorImplTest {
         AlertEvent event = (AlertEvent) firstMsg;
         Assertions.assertEquals(Long.valueOf(1L), event.getRuleId());
         Assertions.assertEquals(Integer.valueOf(100), event.getClientId());
+        // currentValue 应为归一后的百分比（约 91%）
+        Assertions.assertNotNull(event.getCurrentValue());
+        Assertions.assertTrue(event.getCurrentValue() > 80.0 && event.getCurrentValue() < 100.0,
+                "currentValue 应为归一后百分比 0~100，实际 " + event.getCurrentValue());
 
         // SSE 推送应紧随 RabbitMQ 投递，载荷为 AlertHistoryVO
         Assertions.assertEquals(1, publishedSseAlerts.size(), "应通过 SseEventBus 推送一条 alert-fired 事件");
@@ -123,11 +138,11 @@ class AlertEvaluatorImplTest {
      */
     @Test
     void should_not_fire_when_intermittent() throws Exception {
-        rulesInDb.add(buildRule(2L, 200, "cpu", "gt", 0.8, 2));
+        rulesInDb.add(buildRule(2L, 200, "cpu", "gt", 80.0, 2));
 
-        evaluator.evaluate(200, runtime(0.9));     // met
+        evaluator.evaluate(200, runtime(0.9));     // met (90%)
         Thread.sleep(500);
-        evaluator.evaluate(200, runtime(0.5));     // not met, 打断窗口
+        evaluator.evaluate(200, runtime(0.5));     // not met (50%), 打断窗口
         Thread.sleep(500);
         evaluator.evaluate(200, runtime(0.9));     // met
         Thread.sleep(1500);
@@ -144,7 +159,7 @@ class AlertEvaluatorImplTest {
      */
     @Test
     void should_resolve_when_continuously_below_threshold() throws Exception {
-        rulesInDb.add(buildRule(3L, 300, "cpu", "gt", 0.8, 1));
+        rulesInDb.add(buildRule(3L, 300, "cpu", "gt", 80.0, 1));
 
         // 制造一条 firing 历史
         AlertHistory firing = new AlertHistory();
@@ -170,7 +185,7 @@ class AlertEvaluatorImplTest {
      */
     @Test
     void should_skip_silenced_rule() throws Exception {
-        AlertRule rule = buildRule(4L, 400, "cpu", "gt", 0.8, 1);
+        AlertRule rule = buildRule(4L, 400, "cpu", "gt", 80.0, 1);
         rule.setSilenceUntil(new Date(System.currentTimeMillis() + 60_000));
         rulesInDb.add(rule);
 
@@ -187,7 +202,7 @@ class AlertEvaluatorImplTest {
      */
     @Test
     void should_not_duplicate_fire() throws Exception {
-        rulesInDb.add(buildRule(5L, 500, "cpu", "gt", 0.8, 1));
+        rulesInDb.add(buildRule(5L, 500, "cpu", "gt", 80.0, 1));
 
         // 预置一条 firing 历史
         AlertHistory existing = new AlertHistory();
@@ -214,7 +229,7 @@ class AlertEvaluatorImplTest {
      */
     @Test
     void should_not_duplicate_fire_when_acknowledged_and_above_threshold() throws Exception {
-        rulesInDb.add(buildRule(6L, 600, "cpu", "gt", 0.8, 1));
+        rulesInDb.add(buildRule(6L, 600, "cpu", "gt", 80.0, 1));
 
         // 预置一条 acknowledged 历史（用户已确认但故障未恢复）
         AlertHistory acked = new AlertHistory();
@@ -245,7 +260,7 @@ class AlertEvaluatorImplTest {
      */
     @Test
     void should_resolve_acknowledged_when_continuously_below_threshold() throws Exception {
-        rulesInDb.add(buildRule(7L, 700, "cpu", "gt", 0.8, 1));
+        rulesInDb.add(buildRule(7L, 700, "cpu", "gt", 80.0, 1));
 
         AlertHistory acked = new AlertHistory();
         acked.setId(88L);
@@ -274,7 +289,7 @@ class AlertEvaluatorImplTest {
      */
     @Test
     void should_be_thread_safe_under_concurrent_evaluation() throws Exception {
-        rulesInDb.add(buildRule(8L, 800, "cpu", "gt", 0.8, 1));
+        rulesInDb.add(buildRule(8L, 800, "cpu", "gt", 80.0, 1));
         // 预热窗口：保证后续并发评估中窗口跨度足够，能进入触发分支
         evaluator.evaluate(800, runtime(0.95));
         Thread.sleep(1100);
@@ -322,6 +337,167 @@ class AlertEvaluatorImplTest {
                 "并发下最多只能创建 1 条历史记录，实际 " + historyInDb.size());
     }
 
+    /**
+     * 单位归一回归测试：CPU 阈值按百分比配置（80 = 80%），客户端上报 0~1 比例（0.9）
+     * 应被换算为 90 后与 80 比较 → 触发告警。
+     */
+    @Test
+    void should_fire_when_cpu_percent_above_threshold() throws Exception {
+        // threshold=80（百分比），上报 cpuUsage=0.9 (= 90%)
+        rulesInDb.add(buildRule(20L, 1000, "cpu", "gt", 80.0, 1));
+
+        evaluator.evaluate(1000, runtime(0.9));
+        Assertions.assertEquals(0, historyInDb.size(), "首次评估窗口跨度不够，不应触发");
+        Thread.sleep(1100);
+        evaluator.evaluate(1000, runtime(0.95));
+
+        Assertions.assertEquals(1, historyInDb.size(), "归一后 90% > 80% 应触发告警");
+        AlertHistory fired = historyInDb.get(0);
+        Assertions.assertEquals(AlertStatus.FIRING.getColumn(), fired.getStatus());
+        // 反向边界：若不做归一，cpuUsage=0.9 与 threshold=80 比较 → 0.9 > 80 永远 false
+        Assertions.assertTrue(fired.getCurrentValue() > 80.0,
+                "currentValue 必须为归一后百分比，实际 " + fired.getCurrentValue());
+    }
+
+    /**
+     * 单位归一回归测试：CPU 阈值 80%，上报 0.5（= 50%）→ 不应触发。
+     */
+    @Test
+    void should_not_fire_when_cpu_percent_below_threshold() throws Exception {
+        rulesInDb.add(buildRule(21L, 1100, "cpu", "gt", 80.0, 1));
+
+        evaluator.evaluate(1100, runtime(0.5));
+        Thread.sleep(1100);
+        evaluator.evaluate(1100, runtime(0.4));
+
+        Assertions.assertEquals(0, historyInDb.size(),
+                "归一后 50% < 80% 不应触发告警");
+    }
+
+    /**
+     * 单位归一回归测试：内存阈值按百分比配置，客户端上报 GB 已用量，
+     * 后端用 ClientDetail.memory（总内存 GB）做百分比换算。
+     * <p>
+     * 场景：总内存 16 GB、已用 14 GB → 87.5%。阈值 80% → 触发。
+     */
+    @Test
+    void should_fire_when_memory_percent_above_threshold() throws Exception {
+        clientDetailsInDb.put(1200, buildClientDetail(1200, 16.0, 500.0));
+        rulesInDb.add(buildRule(22L, 1200, "memory", "gt", 80.0, 1));
+
+        evaluator.evaluate(1200, runtimeMemory(14.0));
+        Thread.sleep(1100);
+        evaluator.evaluate(1200, runtimeMemory(14.2));
+
+        Assertions.assertEquals(1, historyInDb.size(),
+                "14/16 = 87.5% > 80% 应触发告警");
+        Assertions.assertTrue(historyInDb.get(0).getCurrentValue() > 80.0,
+                "currentValue 必须为归一后百分比");
+    }
+
+    /**
+     * 单位归一回归测试：磁盘阈值百分比 + GB 上报 + ClientDetail.disk 总量。
+     * 总磁盘 500 GB、已用 100 GB → 20%。阈值 80% → 不触发。
+     */
+    @Test
+    void should_not_fire_when_disk_percent_below_threshold() throws Exception {
+        clientDetailsInDb.put(1300, buildClientDetail(1300, 16.0, 500.0));
+        rulesInDb.add(buildRule(23L, 1300, "disk", "gt", 80.0, 1));
+
+        evaluator.evaluate(1300, runtimeDisk(100.0));
+        Thread.sleep(1100);
+        evaluator.evaluate(1300, runtimeDisk(110.0));
+
+        Assertions.assertEquals(0, historyInDb.size(),
+                "20% < 80% 不应触发告警");
+    }
+
+    /**
+     * 网络指标按原始 KB/s 单位配置，不做百分比归一。
+     * 阈值 10000 KB/s，上报 12000 KB/s → 触发。
+     */
+    @Test
+    void should_fire_when_network_kbps_above_threshold() throws Exception {
+        rulesInDb.add(buildRule(24L, 1400, "network_up", "gt", 10000.0, 1));
+
+        evaluator.evaluate(1400, runtimeNetwork(12000.0, 0.0));
+        Thread.sleep(1100);
+        evaluator.evaluate(1400, runtimeNetwork(12500.0, 0.0));
+
+        Assertions.assertEquals(1, historyInDb.size(),
+                "12000 KB/s > 10000 KB/s 应触发告警");
+        Assertions.assertEquals(12500.0, historyInDb.get(0).getCurrentValue(), 0.001,
+                "网络指标 currentValue 保留原始 KB/s 单位");
+    }
+
+    /**
+     * 状态翻转延迟修复回归：先持续 false，再持续 true，达到 durationSec 应立即触发，
+     * 不必等到旧 false 样本被 durationSec*2 裁剪后才触发。
+     */
+    @Test
+    void should_fire_immediately_after_state_flip_to_met() throws Exception {
+        rulesInDb.add(buildRule(25L, 1500, "cpu", "gt", 80.0, 2));
+
+        // 阶段 1：先记录 1 条 false（在窗口中预埋"旧 false"样本，模拟状态翻转）
+        evaluator.evaluate(1500, runtime(0.4));
+        Thread.sleep(500);
+
+        // 阶段 2：从此刻起持续超阈值，窗口在 durationSec=2s 后应满足"最新一段连续 met >= 2s"
+        evaluator.evaluate(1500, runtime(0.9));
+        Thread.sleep(2100);
+        evaluator.evaluate(1500, runtime(0.95));
+
+        Assertions.assertEquals(1, historyInDb.size(),
+                "翻转后连续 met >= durationSec 应立即触发（而非等到 durationSec*2 后）");
+        Assertions.assertEquals(AlertStatus.FIRING.getColumn(), historyInDb.get(0).getStatus());
+    }
+
+    /**
+     * 状态翻转延迟修复回归：连续 met 持续时长 < durationSec 时不应触发。
+     */
+    @Test
+    void should_not_fire_before_continuous_met_reaches_duration() throws Exception {
+        rulesInDb.add(buildRule(26L, 1600, "cpu", "gt", 80.0, 2));
+
+        evaluator.evaluate(1600, runtime(0.9));
+        Thread.sleep(500);
+        evaluator.evaluate(1600, runtime(0.95));
+
+        Assertions.assertEquals(0, historyInDb.size(),
+                "连续 met 跨度 0.5s < durationSec=2s 不应触发");
+    }
+
+    /**
+     * 状态翻转延迟修复回归：从 firing 翻转回 not-met 后，连续不满足 >= durationSec 应立即 resolve。
+     */
+    @Test
+    void should_resolve_immediately_after_state_flip_to_not_met() throws Exception {
+        rulesInDb.add(buildRule(27L, 1700, "cpu", "gt", 80.0, 2));
+
+        // 预置一条 firing 历史
+        AlertHistory firing = new AlertHistory();
+        firing.setId(170L);
+        firing.setRuleId(27L);
+        firing.setClientId(1700);
+        firing.setStatus(AlertStatus.FIRING.getColumn());
+        firing.setLevel(AlertLevel.WARNING.getColumn());
+        firing.setFiredAt(new Date(System.currentTimeMillis() - 5000));
+        historyInDb.add(firing);
+
+        // 阶段 1：先一次 met=true（模拟翻转前的"旧状态"）
+        evaluator.evaluate(1700, runtime(0.95));
+        Thread.sleep(500);
+
+        // 阶段 2：从此刻起持续不满足，2s 后应触发自动 resolve
+        evaluator.evaluate(1700, runtime(0.4));
+        Thread.sleep(2100);
+        evaluator.evaluate(1700, runtime(0.3));
+
+        Assertions.assertEquals(AlertStatus.RESOLVED.getColumn(), firing.getStatus(),
+                "翻转后连续 not-met >= durationSec 应立即 resolve");
+        Assertions.assertNotNull(firing.getResolvedAt());
+    }
+
     // ====== helpers ======
 
     /**
@@ -343,7 +519,18 @@ class AlertEvaluatorImplTest {
     }
 
     /**
-     * 构造测试 runtime。
+     * 构造测试 ClientDetail（用于内存/磁盘百分比归一）。
+     */
+    private ClientDetail buildClientDetail(Integer id, double totalMemoryGb, double totalDiskGb) {
+        ClientDetail detail = new ClientDetail();
+        detail.setId(id);
+        detail.setMemory(totalMemoryGb);
+        detail.setDisk(totalDiskGb);
+        return detail;
+    }
+
+    /**
+     * 构造测试 runtime（仅设置 cpuUsage）。
      */
     private RuntimeDetailVO runtime(double cpu) {
         RuntimeDetailVO vo = new RuntimeDetailVO();
@@ -355,6 +542,34 @@ class AlertEvaluatorImplTest {
         ReflectionTestUtils.setField(vo, "networkDownload", 0.0);
         ReflectionTestUtils.setField(vo, "diskRead", 0.0);
         ReflectionTestUtils.setField(vo, "diskWrite", 0.0);
+        return vo;
+    }
+
+    /**
+     * 构造测试 runtime（仅设置 memoryUsage，GB 已用量）。
+     */
+    private RuntimeDetailVO runtimeMemory(double memoryUsedGb) {
+        RuntimeDetailVO vo = runtime(0.0);
+        ReflectionTestUtils.setField(vo, "memoryUsage", memoryUsedGb);
+        return vo;
+    }
+
+    /**
+     * 构造测试 runtime（仅设置 diskUsage，GB 已用量）。
+     */
+    private RuntimeDetailVO runtimeDisk(double diskUsedGb) {
+        RuntimeDetailVO vo = runtime(0.0);
+        ReflectionTestUtils.setField(vo, "diskUsage", diskUsedGb);
+        return vo;
+    }
+
+    /**
+     * 构造测试 runtime（仅设置 networkUpload / networkDownload，KB/s）。
+     */
+    private RuntimeDetailVO runtimeNetwork(double uploadKbps, double downloadKbps) {
+        RuntimeDetailVO vo = runtime(0.0);
+        ReflectionTestUtils.setField(vo, "networkUpload", uploadKbps);
+        ReflectionTestUtils.setField(vo, "networkDownload", downloadKbps);
         return vo;
     }
 
@@ -495,6 +710,26 @@ class AlertEvaluatorImplTest {
                         return vo;
                     }
                     return defaultProxyMethod(proxy, method, args, "AlertStructMapperStub");
+                });
+    }
+
+    /**
+     * 构造 ClientDetailMapper stub：按 clientId 返回预置的 ClientDetail（含总内存/总磁盘）。
+     */
+    private ClientDetailMapper stubClientDetailMapper() {
+        return (ClientDetailMapper) Proxy.newProxyInstance(
+                ClientDetailMapper.class.getClassLoader(),
+                new Class[]{ClientDetailMapper.class},
+                (proxy, method, args) -> {
+                    if ("selectById".equals(method.getName()) && args.length == 1) {
+                        if (args[0] instanceof Integer id) {
+                            return clientDetailsInDb.get(id);
+                        }
+                        if (args[0] instanceof Number n) {
+                            return clientDetailsInDb.get(n.intValue());
+                        }
+                    }
+                    return defaultProxyMethod(proxy, method, args, "ClientDetailMapperStub");
                 });
     }
 
