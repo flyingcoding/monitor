@@ -1,0 +1,17 @@
+{
+  "model_name": "Example NVMe Critical Warning",
+  "serial_number": "CW0001",
+  "device": {
+    "name": "/dev/nvme2n1",
+    "type": "nvme"
+  },
+  "nvme_smart_health_information_log": {
+    "critical_warning": 2,
+    "temperature": 330,
+    "available_spare": 90,
+    "available_spare_threshold": 10,
+    "percentage_used": 12,
+    "media_errors": 0,
+    "num_err_log_entries": 0
+  }
+}

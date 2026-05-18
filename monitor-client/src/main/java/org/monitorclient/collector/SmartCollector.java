@@ -224,11 +224,12 @@ public class SmartCollector implements MetricCollector {
             stat.setNvme(true);
             Long mediaErrors = readLong(nvmeLog, "media_errors");
             stat.setMediaErrors(mediaErrors);
+            Long criticalWarning = readLong(nvmeLog, "critical_warning");
             Integer temperatureKelvin = readInt(nvmeLog, "temperature");
             if (temperatureKelvin != null) {
                 stat.setTemperatureCelsius(temperatureKelvin - 273);
             }
-            stat.setCritical(mediaErrors != null && mediaErrors > 0);
+            stat.setCritical(positive(criticalWarning) || positive(mediaErrors));
             return stat;
         }
         JSONObject ataAttrs = json.getJSONObject("ata_smart_attributes");

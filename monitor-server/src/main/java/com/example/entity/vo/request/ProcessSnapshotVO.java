@@ -50,4 +50,3 @@ public class ProcessSnapshotVO {
         private long memoryBytes;
     }
 }
-

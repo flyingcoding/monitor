@@ -9,10 +9,10 @@ import lombok.experimental.Accessors;
  * 由 {@link SmartCollector} 解析 {@code smartctl -A -j} 输出后填充：
  * <ul>
  *   <li>SATA：从 {@code ata_smart_attributes.table[]} 提取 id=5 / 197 / 198 / 194；</li>
- *   <li>NVMe：从 {@code nvme_smart_health_information_log} 提取 media_errors / temperature。</li>
+ *   <li>NVMe：从 {@code nvme_smart_health_information_log} 提取 critical_warning / media_errors / temperature。</li>
  * </ul>
- * {@link #critical} 判定标准与 v1.3 prd R26 一致：reallocated/pending/uncorrectable/media_errors
- * 任意 &gt; 0 即视为该设备 critical。
+ * {@link #critical} 判定标准与 v1.3 prd R26 一致：reallocated/pending/uncorrectable/
+ * critical_warning/media_errors 任意 &gt; 0 即视为该设备 critical。
  */
 @Data
 @Accessors(chain = true)

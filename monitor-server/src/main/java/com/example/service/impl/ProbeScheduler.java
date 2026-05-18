@@ -79,6 +79,9 @@ public class ProbeScheduler {
     /** 当前 SSL 已告警的任务集合，避免单次过期窗口内每 tick 都投递。 */
     private final Map<Long, Boolean> sslAlertedTasks = new ConcurrentHashMap<>();
 
+    /** 正在执行的任务 ID 集合，避免同一探测任务在上次执行未结束时被重复调度。 */
+    private final Map<Long, Boolean> runningTaskIds = new ConcurrentHashMap<>();
+
     /** 探测任务执行线程池：虚拟线程 per task，避免 HTTP 慢任务影响其他任务。 */
     private ExecutorService taskExecutor;
 
@@ -123,13 +126,29 @@ public class ProbeScheduler {
                 if (!Boolean.TRUE.equals(task.getEnabled())) {
                     continue;
                 }
+                Long taskId = task.getId();
                 long intervalMs = (task.getIntervalSec() == null ? 60 : task.getIntervalSec()) * 1000L;
-                Long lastRun = lastRunAt.get(task.getId());
+                Long lastRun = lastRunAt.get(taskId);
                 if (lastRun != null && now - lastRun < intervalMs) {
                     continue;
                 }
-                lastRunAt.put(task.getId(), now);
-                taskExecutor.submit(() -> runSingle(task));
+                if (runningTaskIds.putIfAbsent(taskId, Boolean.TRUE) != null) {
+                    continue;
+                }
+                lastRunAt.put(taskId, now);
+                try {
+                    taskExecutor.submit(() -> {
+                        try {
+                            runSingle(task);
+                        } finally {
+                            runningTaskIds.remove(taskId);
+                        }
+                    });
+                } catch (RuntimeException e) {
+                    runningTaskIds.remove(taskId);
+                    lastRunAt.remove(taskId);
+                    throw e;
+                }
             }
         } catch (Exception e) {
             log.warn("ProbeScheduler tick 异常：{}", e.getMessage(), e);
@@ -310,6 +329,7 @@ public class ProbeScheduler {
         failureCounters.clear();
         lastRunAt.clear();
         sslAlertedTasks.clear();
+        runningTaskIds.clear();
     }
 
     /**
@@ -325,5 +345,12 @@ public class ProbeScheduler {
      */
     public boolean sslAlertedForTest(Long taskId) {
         return Boolean.TRUE.equals(sslAlertedTasks.get(taskId));
+    }
+
+    /**
+     * 测试辅助：读取任务是否处于执行中。
+     */
+    public boolean runningForTest(Long taskId) {
+        return Boolean.TRUE.equals(runningTaskIds.get(taskId));
     }
 }

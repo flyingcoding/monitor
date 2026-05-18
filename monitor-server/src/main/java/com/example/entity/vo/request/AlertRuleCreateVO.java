@@ -1,5 +1,6 @@
 package com.example.entity.vo.request;
 
+import com.example.entity.alert.AlertMetric;
 import jakarta.validation.constraints.DecimalMax;
 import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.Max;
@@ -24,7 +25,7 @@ public class AlertRuleCreateVO {
     /** 客户端ID；为空表示全局规则（对所有客户端生效）。 */
     Integer clientId;
     @NotBlank
-    @Pattern(regexp = "cpu|memory|disk|network_up|network_down")
+    @Pattern(regexp = AlertMetric.VALID_COLUMNS_PATTERN)
     String metric;
     @NotBlank
     @Pattern(regexp = "gt|lt|gte|lte")

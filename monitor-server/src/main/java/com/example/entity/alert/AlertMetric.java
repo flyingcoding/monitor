@@ -24,6 +24,10 @@ public enum AlertMetric {
     /** v1.3：关键进程缺失数（未匹配到的 process pattern 个数）。 */
     WATCHED_PROCESS_MISSING("watched_process_missing");
 
+    /** 请求 VO 中允许的 metric 列值，需与枚举项保持一致。 */
+    public static final String VALID_COLUMNS_PATTERN = "cpu|memory|disk|network_up|network_down"
+            + "|gpu_temperature_max|smart_critical_count|systemd_failed_count|watched_process_missing";
+
     private final String column;
 
     AlertMetric(String column) {

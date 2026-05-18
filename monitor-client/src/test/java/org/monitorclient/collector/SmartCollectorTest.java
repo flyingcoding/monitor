@@ -32,7 +32,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *   <li>SATA 健康 fixture → criticalCount=0；</li>
  *   <li>SATA 关键异常 fixture → criticalCount=1（reallocated+pending+uncorrectable 任意 &gt; 0）；</li>
  *   <li>NVMe 健康 fixture → criticalCount=0、温度由 Kelvin 转 Celsius；</li>
- *   <li>NVMe media_errors&gt;0 → critical；</li>
+ *   <li>NVMe critical_warning/media_errors&gt;0 → critical；</li>
  *   <li>命令超时 → 跳过该设备，不算 critical；</li>
  *   <li>命令 exit code 非 0 + 无 stdout → 跳过；</li>
  *   <li>非法 JSON 输出 → 跳过该设备；</li>
@@ -140,6 +140,25 @@ class SmartCollectorTest {
         assertTrue(stat.isCritical());
         assertEquals(17L, stat.getMediaErrors());
         assertEquals(75, stat.getTemperatureCelsius());
+    }
+
+    /**
+     * NVMe critical_warning&gt;0 且 media_errors=0 时也应视为 critical。
+     */
+    @Test
+    void nvmeCriticalWarningShouldMarkCriticalWithoutMediaErrors() throws IOException {
+        executor.smartctlAvailable = true;
+        executor.outputs.put("/dev/nvme2n1", new CommandExecutor.CommandResult(
+                0, loadFixture("smart-nvme-critical-warning-only.json"), "", false));
+        SmartCollector collector = new SmartCollector(executor, propsWithDevices("/dev/nvme2n1"));
+        RuntimeDetail rt = new RuntimeDetail();
+
+        collector.enhance(rt);
+
+        assertEquals(1, rt.getSmartCriticalCount());
+        SmartStat stat = collector.lastSnapshot().get(0);
+        assertTrue(stat.isCritical());
+        assertEquals(0L, stat.getMediaErrors());
     }
 
     /**

@@ -16,10 +16,14 @@ import org.springframework.amqp.core.AmqpTemplate;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.lang.reflect.Proxy;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -33,15 +37,30 @@ class ProbeSchedulerTest {
     private ProbeScheduler scheduler;
     private final ConcurrentLinkedQueue<AlertEvent> publishedEvents = new ConcurrentLinkedQueue<>();
     private final AtomicReference<ProbeResult> nextHttpResult = new AtomicReference<>();
+    private final List<ProbeTask> enabledTasks = new ArrayList<>();
+    private final AtomicInteger httpExecuteCount = new AtomicInteger();
+    private CountDownLatch httpStarted;
+    private CountDownLatch httpRelease;
+    private CountDownLatch httpFinished;
 
     @BeforeEach
     void setUp() {
         scheduler = new ProbeScheduler();
         publishedEvents.clear();
         nextHttpResult.set(ProbeResult.builder().success(true).latencyMs(10).build());
+        enabledTasks.clear();
+        httpExecuteCount.set(0);
+        httpStarted = null;
+        httpRelease = null;
+        httpFinished = null;
 
         // ProbeServiceImpl stub：resolveHeaders / resolveBasicAuthPassword / resolveChannelIds / saveHistory
         ProbeServiceImpl probeService = new ProbeServiceImpl() {
+            @Override
+            public List<ProbeTask> listEnabledTasks() {
+                return List.copyOf(enabledTasks);
+            }
+
             @Override
             public Map<String, String> resolveHeaders(ProbeTask task) {
                 return Collections.emptyMap();
@@ -67,6 +86,25 @@ class ProbeSchedulerTest {
         HttpProbeExecutor httpExec = new HttpProbeExecutor() {
             @Override
             public ProbeResult execute(ProbeTask t, Map<String, String> hdrs, String pwd) {
+                httpExecuteCount.incrementAndGet();
+                CountDownLatch started = httpStarted;
+                if (started != null) {
+                    started.countDown();
+                }
+                CountDownLatch release = httpRelease;
+                if (release != null) {
+                    try {
+                        release.await(5, TimeUnit.SECONDS);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        return ProbeResult.builder().success(false).errorMessage("interrupted").build();
+                    } finally {
+                        CountDownLatch finished = httpFinished;
+                        if (finished != null) {
+                            finished.countDown();
+                        }
+                    }
+                }
                 ProbeResult r = nextHttpResult.get();
                 return r == null
                         ? ProbeResult.builder().success(false).errorMessage("no result").build()
@@ -241,6 +279,43 @@ class ProbeSchedulerTest {
         task.setEnabled(Boolean.TRUE);
         Assertions.assertDoesNotThrow(() -> scheduler.runSingle(task));
         Assertions.assertEquals(0, publishedEvents.size());
+    }
+
+    /**
+     * tick 不应在同一任务上次执行未结束时再次提交，避免慢探测重叠执行。
+     */
+    @Test
+    void tickShouldNotOverlapSameTaskWhileRunning() throws Exception {
+        ProbeTask task = task("slow-http", 5);
+        task.setIntervalSec(1);
+        enabledTasks.add(task);
+        httpStarted = new CountDownLatch(1);
+        httpRelease = new CountDownLatch(1);
+        httpFinished = new CountDownLatch(1);
+        scheduler.init();
+        try {
+            scheduler.tick();
+            Assertions.assertTrue(httpStarted.await(2, TimeUnit.SECONDS),
+                    "第一次 tick 应提交并开始执行任务");
+            Assertions.assertTrue(scheduler.runningForTest(task.getId()));
+
+            Thread.sleep(1100);
+            scheduler.tick();
+            Assertions.assertEquals(1, httpExecuteCount.get(),
+                    "任务仍在运行时，即使 interval 已到也不应重复提交");
+
+            httpRelease.countDown();
+            Assertions.assertTrue(httpFinished.await(2, TimeUnit.SECONDS),
+                    "释放后任务应能正常结束");
+            long deadline = System.currentTimeMillis() + 2000;
+            while (scheduler.runningForTest(task.getId()) && System.currentTimeMillis() < deadline) {
+                Thread.sleep(10);
+            }
+            Assertions.assertFalse(scheduler.runningForTest(task.getId()));
+        } finally {
+            httpRelease.countDown();
+            scheduler.destroy();
+        }
     }
 
     /**
