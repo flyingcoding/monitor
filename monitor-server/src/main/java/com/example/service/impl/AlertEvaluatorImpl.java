@@ -236,6 +236,14 @@ public class AlertEvaluatorImpl implements AlertEvaluator {
             // 网络速率保留 KB/s 原始单位，不做归一
             case NETWORK_UP -> runtime.getNetworkUpload();
             case NETWORK_DOWN -> runtime.getNetworkDownload();
+            // v1.3 聚合指标：客户端无对应采集时上报 null，规则评估自动跳过（D1 决策）
+            case GPU_TEMPERATURE_MAX -> runtime.getGpuTemperatureMax();
+            case SMART_CRITICAL_COUNT -> runtime.getSmartCriticalCount() == null
+                    ? null : runtime.getSmartCriticalCount().doubleValue();
+            case SYSTEMD_FAILED_COUNT -> runtime.getSystemdFailedCount() == null
+                    ? null : runtime.getSystemdFailedCount().doubleValue();
+            case WATCHED_PROCESS_MISSING -> runtime.getWatchedProcessMissing() == null
+                    ? null : runtime.getWatchedProcessMissing().doubleValue();
         };
     }
 

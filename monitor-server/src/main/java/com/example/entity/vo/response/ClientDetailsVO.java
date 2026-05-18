@@ -22,4 +22,6 @@ public class ClientDetailsVO {
     double memory;
     int cpuCore;
     double disk;
+    /** v1.3：客户端采集能力 JSON，由前端 Manage / 详情页解析显示能力徽章。 */
+    String capabilitiesJson;
 }

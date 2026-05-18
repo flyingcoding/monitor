@@ -1,0 +1,53 @@
+{
+  "model_name": "Samsung SSD 850 EVO 500GB",
+  "serial_number": "S2RANX0J123456A",
+  "device": {
+    "name": "/dev/sda",
+    "type": "sat"
+  },
+  "ata_smart_attributes": {
+    "revision": 1,
+    "table": [
+      {
+        "id": 5,
+        "name": "Reallocated_Sector_Ct",
+        "value": 100,
+        "worst": 100,
+        "thresh": 10,
+        "raw": {"value": 0, "string": "0"}
+      },
+      {
+        "id": 194,
+        "name": "Temperature_Celsius",
+        "value": 65,
+        "worst": 50,
+        "thresh": 0,
+        "raw": {"value": 35, "string": "35"}
+      },
+      {
+        "id": 197,
+        "name": "Current_Pending_Sector",
+        "value": 100,
+        "worst": 100,
+        "thresh": 0,
+        "raw": {"value": 0, "string": "0"}
+      },
+      {
+        "id": 198,
+        "name": "Offline_Uncorrectable",
+        "value": 100,
+        "worst": 100,
+        "thresh": 0,
+        "raw": {"value": 0, "string": "0"}
+      },
+      {
+        "id": 199,
+        "name": "UDMA_CRC_Error_Count",
+        "value": 200,
+        "worst": 200,
+        "thresh": 0,
+        "raw": {"value": 0, "string": "0"}
+      }
+    ]
+  }
+}

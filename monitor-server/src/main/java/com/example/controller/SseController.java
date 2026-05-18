@@ -3,6 +3,10 @@ package com.example.controller;
 import com.example.entity.vo.request.RuntimeDetailVO;
 import com.example.entity.vo.response.AlertHistoryVO;
 import com.example.entity.vo.response.ClientPreviewVO;
+import com.example.entity.vo.response.GpuSnapshotResponseVO;
+import com.example.entity.vo.response.ProcessSnapshotResponseVO;
+import com.example.entity.vo.response.SmartSnapshotResponseVO;
+import com.example.entity.vo.response.SystemdSnapshotResponseVO;
 import com.example.service.ClientService;
 import com.example.service.PermissionService;
 import com.example.utils.Const;
@@ -39,6 +43,10 @@ public class SseController {
     private final List<ClientListSubscriber> clientListEmitters = new CopyOnWriteArrayList<>();
     private final Map<Integer, List<SseEmitter>> runtimeEmitters = new ConcurrentHashMap<>();
     private final List<AlertSubscriber> alertEmitters = new CopyOnWriteArrayList<>();
+    private final Map<Integer, List<SseEmitter>> systemdEmitters = new ConcurrentHashMap<>();
+    private final Map<Integer, List<SseEmitter>> smartEmitters = new ConcurrentHashMap<>();
+    private final Map<Integer, List<SseEmitter>> processEmitters = new ConcurrentHashMap<>();
+    private final Map<Integer, List<SseEmitter>> gpuEmitters = new ConcurrentHashMap<>();
 
     private record ClientListSubscriber(int userId, String userRole, SseEmitter emitter) {
     }
@@ -108,6 +116,106 @@ public class SseController {
     }
 
     /**
+     * 订阅指定主机的 systemd 快照实时事件。权限校验等同于 runtime 订阅。
+     *
+     * @param clientId 目标主机ID
+     * @param token 前端通过 query 透传的 JWT token
+     * @param userId 当前用户ID
+     * @param userRole 当前用户角色
+     * @return SSE 发射器
+     */
+    @GetMapping("/systemd/{clientId}")
+    public SseEmitter subscribeSystemd(@PathVariable int clientId,
+                                       @RequestParam String token,
+                                       @RequestAttribute(Const.ATTR_USER_ID) int userId,
+                                       @RequestAttribute(Const.ATTR_USER_ROLE) String userRole) {
+        if (!permissionService.canAccessClient(userId, userRole, clientId)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "无权访问该主机");
+        }
+        SseEmitter emitter = new SseEmitter(0L);
+        systemdEmitters.computeIfAbsent(clientId, k -> new CopyOnWriteArrayList<>()).add(emitter);
+        emitter.onCompletion(() -> removeSystemdEmitter(clientId, emitter));
+        emitter.onTimeout(() -> removeSystemdEmitter(clientId, emitter));
+        emitter.onError(e -> removeSystemdEmitter(clientId, emitter));
+        return emitter;
+    }
+
+    /**
+     * 订阅指定主机的 SMART 快照实时事件。权限校验等同于 runtime 订阅。
+     *
+     * @param clientId 目标主机ID
+     * @param token 前端通过 query 透传的 JWT token
+     * @param userId 当前用户ID
+     * @param userRole 当前用户角色
+     * @return SSE 发射器
+     */
+    @GetMapping("/smart/{clientId}")
+    public SseEmitter subscribeSmart(@PathVariable int clientId,
+                                     @RequestParam String token,
+                                     @RequestAttribute(Const.ATTR_USER_ID) int userId,
+                                     @RequestAttribute(Const.ATTR_USER_ROLE) String userRole) {
+        if (!permissionService.canAccessClient(userId, userRole, clientId)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "无权访问该主机");
+        }
+        SseEmitter emitter = new SseEmitter(0L);
+        smartEmitters.computeIfAbsent(clientId, k -> new CopyOnWriteArrayList<>()).add(emitter);
+        emitter.onCompletion(() -> removeSmartEmitter(clientId, emitter));
+        emitter.onTimeout(() -> removeSmartEmitter(clientId, emitter));
+        emitter.onError(e -> removeSmartEmitter(clientId, emitter));
+        return emitter;
+    }
+
+    /**
+     * 订阅指定主机的进程快照实时事件。权限校验等同于 runtime 订阅。
+     *
+     * @param clientId 目标主机ID
+     * @param token 前端通过 query 透传的 JWT token
+     * @param userId 当前用户ID
+     * @param userRole 当前用户角色
+     * @return SSE 发射器
+     */
+    @GetMapping("/process/{clientId}")
+    public SseEmitter subscribeProcess(@PathVariable int clientId,
+                                       @RequestParam String token,
+                                       @RequestAttribute(Const.ATTR_USER_ID) int userId,
+                                       @RequestAttribute(Const.ATTR_USER_ROLE) String userRole) {
+        if (!permissionService.canAccessClient(userId, userRole, clientId)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "无权访问该主机");
+        }
+        SseEmitter emitter = new SseEmitter(0L);
+        processEmitters.computeIfAbsent(clientId, k -> new CopyOnWriteArrayList<>()).add(emitter);
+        emitter.onCompletion(() -> removeProcessEmitter(clientId, emitter));
+        emitter.onTimeout(() -> removeProcessEmitter(clientId, emitter));
+        emitter.onError(e -> removeProcessEmitter(clientId, emitter));
+        return emitter;
+    }
+
+    /**
+     * 订阅指定主机的 NVIDIA GPU 快照实时事件。权限校验等同于 runtime 订阅。
+     *
+     * @param clientId 目标主机ID
+     * @param token 前端通过 query 透传的 JWT token
+     * @param userId 当前用户ID
+     * @param userRole 当前用户角色
+     * @return SSE 发射器
+     */
+    @GetMapping("/gpu/{clientId}")
+    public SseEmitter subscribeGpu(@PathVariable int clientId,
+                                   @RequestParam String token,
+                                   @RequestAttribute(Const.ATTR_USER_ID) int userId,
+                                   @RequestAttribute(Const.ATTR_USER_ROLE) String userRole) {
+        if (!permissionService.canAccessClient(userId, userRole, clientId)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "无权访问该主机");
+        }
+        SseEmitter emitter = new SseEmitter(0L);
+        gpuEmitters.computeIfAbsent(clientId, k -> new CopyOnWriteArrayList<>()).add(emitter);
+        emitter.onCompletion(() -> removeGpuEmitter(clientId, emitter));
+        emitter.onTimeout(() -> removeGpuEmitter(clientId, emitter));
+        emitter.onError(e -> removeGpuEmitter(clientId, emitter));
+        return emitter;
+    }
+
+    /**
      * 订阅告警触发事件流；按用户权限过滤可见客户端的告警。
      *
      * @param token    前端通过 query 透传的 JWT token
@@ -159,6 +267,78 @@ public class SseController {
                 emitter.send(SseEmitter.event().name("runtime").data(vo));
             } catch (Exception e) {
                 removeRuntimeEmitter(clientId, emitter);
+            }
+        }
+    }
+
+    /**
+     * 向指定主机的 systemd 订阅者推送最新 unit 快照。
+     *
+     * @param clientId 主机ID
+     * @param vo 快照响应 VO
+     */
+    public void pushSystemdSnapshot(int clientId, SystemdSnapshotResponseVO vo) {
+        List<SseEmitter> emitters = systemdEmitters.get(clientId);
+        if (emitters == null || emitters.isEmpty()) return;
+        for (SseEmitter emitter : emitters) {
+            try {
+                emitter.send(SseEmitter.event().name("systemd-snapshot").data(vo));
+            } catch (Exception e) {
+                removeSystemdEmitter(clientId, emitter);
+            }
+        }
+    }
+
+    /**
+     * 向指定主机的 SMART 订阅者推送最新磁盘健康快照。
+     *
+     * @param clientId 主机ID
+     * @param vo 快照响应 VO
+     */
+    public void pushSmartSnapshot(int clientId, SmartSnapshotResponseVO vo) {
+        List<SseEmitter> emitters = smartEmitters.get(clientId);
+        if (emitters == null || emitters.isEmpty()) return;
+        for (SseEmitter emitter : emitters) {
+            try {
+                emitter.send(SseEmitter.event().name("smart-snapshot").data(vo));
+            } catch (Exception e) {
+                removeSmartEmitter(clientId, emitter);
+            }
+        }
+    }
+
+    /**
+     * 向指定主机的进程订阅者推送最新进程快照。
+     *
+     * @param clientId 主机ID
+     * @param vo 快照响应 VO
+     */
+    public void pushProcessSnapshot(int clientId, ProcessSnapshotResponseVO vo) {
+        List<SseEmitter> emitters = processEmitters.get(clientId);
+        if (emitters == null || emitters.isEmpty()) return;
+        for (SseEmitter emitter : emitters) {
+            try {
+                emitter.send(SseEmitter.event().name("process-snapshot").data(vo));
+            } catch (Exception e) {
+                removeProcessEmitter(clientId, emitter);
+            }
+        }
+    }
+
+    /**
+     * 向指定主机的 GPU 订阅者推送最新 NVIDIA GPU 快照。
+     *
+     * @param clientId 主机ID
+     * @param vo 快照响应 VO
+     */
+    public void pushGpuSnapshot(int clientId, GpuSnapshotResponseVO vo) {
+        List<SseEmitter> emitters = gpuEmitters.get(clientId);
+        if (emitters == null || emitters.isEmpty()) return;
+        for (SseEmitter emitter : emitters) {
+            try {
+                emitter.send(SseEmitter.event().name("gpu-snapshot").data(vo));
+            } catch (Exception e) {
+                removeGpuEmitter(clientId, emitter);
             }
         }
     }
@@ -217,6 +397,50 @@ public class SseController {
             }
         }
         alertEmitters.clear();
+
+        systemdEmitters.values().forEach(list -> {
+            list.forEach(emitter -> {
+                try {
+                    emitter.complete();
+                } catch (Exception ignored) {
+                }
+            });
+            list.clear();
+        });
+        systemdEmitters.clear();
+
+        smartEmitters.values().forEach(list -> {
+            list.forEach(emitter -> {
+                try {
+                    emitter.complete();
+                } catch (Exception ignored) {
+                }
+            });
+            list.clear();
+        });
+        smartEmitters.clear();
+
+        processEmitters.values().forEach(list -> {
+            list.forEach(emitter -> {
+                try {
+                    emitter.complete();
+                } catch (Exception ignored) {
+                }
+            });
+            list.clear();
+        });
+        processEmitters.clear();
+
+        gpuEmitters.values().forEach(list -> {
+            list.forEach(emitter -> {
+                try {
+                    emitter.complete();
+                } catch (Exception ignored) {
+                }
+            });
+            list.clear();
+        });
+        gpuEmitters.clear();
     }
 
     /**
@@ -242,6 +466,74 @@ public class SseController {
         emitters.remove(emitter);
         if (emitters.isEmpty()) {
             runtimeEmitters.remove(clientId);
+        }
+    }
+
+    /**
+     * 移除指定主机的 systemd 订阅者。
+     *
+     * @param clientId 主机ID
+     * @param emitter SSE 发射器
+     */
+    private void removeSystemdEmitter(int clientId, SseEmitter emitter) {
+        List<SseEmitter> emitters = systemdEmitters.get(clientId);
+        if (emitters == null) {
+            return;
+        }
+        emitters.remove(emitter);
+        if (emitters.isEmpty()) {
+            systemdEmitters.remove(clientId);
+        }
+    }
+
+    /**
+     * 移除指定主机的 SMART 订阅者。
+     *
+     * @param clientId 主机ID
+     * @param emitter SSE 发射器
+     */
+    private void removeSmartEmitter(int clientId, SseEmitter emitter) {
+        List<SseEmitter> emitters = smartEmitters.get(clientId);
+        if (emitters == null) {
+            return;
+        }
+        emitters.remove(emitter);
+        if (emitters.isEmpty()) {
+            smartEmitters.remove(clientId);
+        }
+    }
+
+    /**
+     * 移除指定主机的进程订阅者。
+     *
+     * @param clientId 主机ID
+     * @param emitter SSE 发射器
+     */
+    private void removeProcessEmitter(int clientId, SseEmitter emitter) {
+        List<SseEmitter> emitters = processEmitters.get(clientId);
+        if (emitters == null) {
+            return;
+        }
+        emitters.remove(emitter);
+        if (emitters.isEmpty()) {
+            processEmitters.remove(clientId);
+        }
+    }
+
+    /**
+     * 移除指定主机的 NVIDIA GPU 订阅者。
+     *
+     * @param clientId 主机ID
+     * @param emitter SSE 发射器
+     */
+    private void removeGpuEmitter(int clientId, SseEmitter emitter) {
+        List<SseEmitter> emitters = gpuEmitters.get(clientId);
+        if (emitters == null) {
+            return;
+        }
+        emitters.remove(emitter);
+        if (emitters.isEmpty()) {
+            gpuEmitters.remove(clientId);
         }
     }
 

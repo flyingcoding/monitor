@@ -1,0 +1,17 @@
+{
+  "model_name": "WD Black SN750 NVMe",
+  "serial_number": "WX21AB223344",
+  "device": {
+    "name": "/dev/nvme1n1",
+    "type": "nvme"
+  },
+  "nvme_smart_health_information_log": {
+    "critical_warning": 2,
+    "temperature": 348,
+    "available_spare": 25,
+    "available_spare_threshold": 10,
+    "percentage_used": 95,
+    "media_errors": 17,
+    "num_err_log_entries": 8
+  }
+}

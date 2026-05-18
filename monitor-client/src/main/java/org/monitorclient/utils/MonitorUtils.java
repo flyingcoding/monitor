@@ -3,6 +3,8 @@ package org.monitorclient.utils;
 import lombok.extern.slf4j.Slf4j;
 import org.monitorclient.entity.BaseDetail;
 import org.monitorclient.entity.RuntimeDetail;
+import org.monitorclient.system.OshiSystemInfoProvider;
+import org.monitorclient.system.SystemInfoProvider;
 import oshi.SystemInfo;
 import oshi.hardware.CentralProcessor;
 import oshi.hardware.HardwareAbstractionLayer;
@@ -17,18 +19,18 @@ import java.util.Objects;
 import java.util.Properties;
 
 /**
- * @program: monitor
- * @description: 获取主机信息工具类
- * @author: 王贝强
- * @create: 2024-07-14 22:32
+ * 主机信息采集工具。
+ * <p>
+ * v1.3 重构：{@link SystemInfo} 改为通过 {@link SystemInfoProvider} 注入，便于单元测试 mock OSHI。
+ * 生产构造（无参 / 默认构造）保持向后兼容，内部使用 {@link OshiSystemInfoProvider}。
  */
 @Slf4j
 public class MonitorUtils {
     private final double GB_TO_BYTES = 1024 * 1024 * 1024.0;
     private final double MB_TO_BYTES = 1024 * 1024.0;
     private final double KB_TO_BYTES = 1024.0;
-    private final SystemInfo info = new SystemInfo();
-    private final Properties properties = System.getProperties();
+    private final SystemInfoProvider provider;
+    private final Properties properties;
 
     private long[] previousTicks;
     private long previousUpload;
@@ -38,11 +40,31 @@ public class MonitorUtils {
     private long previousTimestamp;
 
     /**
+     * 默认构造：使用 {@link OshiSystemInfoProvider}。
+     * 保持与 v1.2 客户端入口的兼容（{@code new MonitorUtils()}）。
+     */
+    public MonitorUtils() {
+        this(new OshiSystemInfoProvider(), System.getProperties());
+    }
+
+    /**
+     * 显式注入版本：用于单元测试或 Phase 1 子模块自定义 provider。
+     *
+     * @param provider OSHI 系统信息提供者
+     * @param properties JVM 系统属性
+     */
+    public MonitorUtils(SystemInfoProvider provider, Properties properties) {
+        this.provider = provider;
+        this.properties = properties;
+    }
+
+    /**
      * 采集主机基础静态信息（系统、硬件与网络出口IP）。
      *
      * @return 主机基础信息
      */
     public BaseDetail monitorBaseDetail(){
+        SystemInfo info = provider.systemInfo();
         OperatingSystem os = info.getOperatingSystem();
         HardwareAbstractionLayer hardware = info.getHardware();
         double memory = hardware.getMemory().getTotal() / GB_TO_BYTES;
@@ -67,6 +89,7 @@ public class MonitorUtils {
      */
     public RuntimeDetail monitorRuntimeDetail() {
         try {
+            SystemInfo info = provider.systemInfo();
             HardwareAbstractionLayer hardware = info.getHardware();
             NetworkIF networkInterface = Objects.requireNonNull(this.findNetworkInterface(hardware));
             networkInterface.updateAttributes();

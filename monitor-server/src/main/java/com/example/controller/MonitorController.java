@@ -8,10 +8,18 @@ import com.example.entity.vo.request.SshConnectVO;
 import com.example.entity.vo.response.ClientDetailsVO;
 import com.example.entity.vo.response.ClientPreviewVO;
 import com.example.entity.vo.response.ClientSimpleVO;
+import com.example.entity.vo.response.GpuSnapshotResponseVO;
+import com.example.entity.vo.response.ProcessSnapshotResponseVO;
 import com.example.entity.vo.response.RuntimeHistoryVO;
 import com.example.entity.vo.response.SshSettingsVO;
+import com.example.entity.vo.response.SmartSnapshotResponseVO;
+import com.example.entity.vo.response.SystemdSnapshotResponseVO;
 import com.example.service.ClientService;
+import com.example.service.GpuSnapshotService;
 import com.example.service.PermissionService;
+import com.example.service.ProcessSnapshotService;
+import com.example.service.SmartSnapshotService;
+import com.example.service.SystemdSnapshotService;
 import com.example.utils.Const;
 import jakarta.annotation.Resource;
 import jakarta.validation.Valid;
@@ -37,6 +45,18 @@ public class MonitorController {
 
     @Resource
     private PermissionService permissionService;
+
+    @Resource
+    private SystemdSnapshotService systemdSnapshotService;
+
+    @Resource
+    private SmartSnapshotService smartSnapshotService;
+
+    @Resource
+    private ProcessSnapshotService processSnapshotService;
+
+    @Resource
+    private GpuSnapshotService gpuSnapshotService;
 
     /**
      * 查询当前用户可见的客户端列表。
@@ -222,6 +242,80 @@ public class MonitorController {
                                                  @RequestParam int clientId) {
         if (permissionService.canAccessClient(userId, userRole, clientId)) {
             return RestBean.success(clientService.getSshSetting(clientId));
+        } else
+            return RestBean.noPermission();
+    }
+
+    /**
+     * 查询客户端最近一次 systemd 快照。无 systemd 采集或缓存已过期时返回 null。
+     *
+     * @param clientId 客户端ID
+     * @param userId 当前用户ID
+     * @param userRole 当前用户角色
+     * @return 快照响应
+     */
+    @GetMapping("/systemd")
+    public RestBean<SystemdSnapshotResponseVO> getSystemdSnapshot(@RequestParam int clientId,
+                                                                  @RequestAttribute(Const.ATTR_USER_ID) int userId,
+                                                                  @RequestAttribute(Const.ATTR_USER_ROLE) String userRole) {
+        if (permissionService.canAccessClient(userId, userRole, clientId)) {
+            return RestBean.success(systemdSnapshotService.getLatest(clientId));
+        } else
+            return RestBean.noPermission();
+    }
+
+    /**
+     * 查询客户端最近一次 SMART 磁盘健康快照。无 SMART 采集或缓存已过期时返回 null。
+     *
+     * @param clientId 客户端ID
+     * @param userId 当前用户ID
+     * @param userRole 当前用户角色
+     * @return 快照响应
+     */
+    @GetMapping("/smart")
+    public RestBean<SmartSnapshotResponseVO> getSmartSnapshot(@RequestParam int clientId,
+                                                              @RequestAttribute(Const.ATTR_USER_ID) int userId,
+                                                              @RequestAttribute(Const.ATTR_USER_ROLE) String userRole) {
+        if (permissionService.canAccessClient(userId, userRole, clientId)) {
+            return RestBean.success(smartSnapshotService.getLatest(clientId));
+        } else
+            return RestBean.noPermission();
+    }
+
+    /**
+     * 查询客户端最近一次进程快照（Top N + watched pattern 状态）。
+     * 无进程采集或缓存已过期时返回 null。
+     *
+     * @param clientId 客户端ID
+     * @param userId 当前用户ID
+     * @param userRole 当前用户角色
+     * @return 快照响应
+     */
+    @GetMapping("/process")
+    public RestBean<ProcessSnapshotResponseVO> getProcessSnapshot(@RequestParam int clientId,
+                                                                  @RequestAttribute(Const.ATTR_USER_ID) int userId,
+                                                                  @RequestAttribute(Const.ATTR_USER_ROLE) String userRole) {
+        if (permissionService.canAccessClient(userId, userRole, clientId)) {
+            return RestBean.success(processSnapshotService.getLatest(clientId));
+        } else
+            return RestBean.noPermission();
+    }
+
+    /**
+     * 查询客户端最近一次 NVIDIA GPU 快照（每张卡的利用率/显存/温度/功耗）。
+     * 无 GPU 采集或缓存已过期时返回 null。
+     *
+     * @param clientId 客户端ID
+     * @param userId 当前用户ID
+     * @param userRole 当前用户角色
+     * @return 快照响应
+     */
+    @GetMapping("/gpu")
+    public RestBean<GpuSnapshotResponseVO> getGpuSnapshot(@RequestParam int clientId,
+                                                          @RequestAttribute(Const.ATTR_USER_ID) int userId,
+                                                          @RequestAttribute(Const.ATTR_USER_ROLE) String userRole) {
+        if (permissionService.canAccessClient(userId, userRole, clientId)) {
+            return RestBean.success(gpuSnapshotService.getLatest(clientId));
         } else
             return RestBean.noPermission();
     }

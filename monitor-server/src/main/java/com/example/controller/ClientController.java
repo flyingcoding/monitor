@@ -3,8 +3,16 @@ package com.example.controller;
 import com.example.entity.RestBean;
 import com.example.entity.dto.Client;
 import com.example.entity.vo.request.ClientDetailVO;
+import com.example.entity.vo.request.GpuSnapshotVO;
+import com.example.entity.vo.request.ProcessSnapshotVO;
 import com.example.entity.vo.request.RuntimeDetailVO;
+import com.example.entity.vo.request.SmartSnapshotVO;
+import com.example.entity.vo.request.SystemdSnapshotVO;
 import com.example.service.ClientService;
+import com.example.service.GpuSnapshotService;
+import com.example.service.ProcessSnapshotService;
+import com.example.service.SmartSnapshotService;
+import com.example.service.SystemdSnapshotService;
 import com.example.utils.Const;
 import jakarta.annotation.Resource;
 import jakarta.validation.Valid;
@@ -26,6 +34,18 @@ import java.util.Objects;
 public class ClientController {
     @Resource
     ClientService clientService;
+
+    @Resource
+    SystemdSnapshotService systemdSnapshotService;
+
+    @Resource
+    SmartSnapshotService smartSnapshotService;
+
+    @Resource
+    ProcessSnapshotService processSnapshotService;
+
+    @Resource
+    GpuSnapshotService gpuSnapshotService;
 
     @GetMapping("/register")
     public RestBean<Void> registerClient(@RequestHeader("Authorization") String token){
@@ -71,6 +91,62 @@ public class ClientController {
         for (RuntimeDetailVO vo : batch) {
             clientService.updateRuntimeDetail(vo, client);
         }
+        return RestBean.success();
+    }
+
+    /**
+     * 客户端上报 systemd unit 状态快照。
+     *
+     * @param client 当前客户端
+     * @param vo 快照载荷
+     * @return 处理结果
+     */
+    @PostMapping("/systemd")
+    public RestBean<Void> updateSystemdSnapshot(@RequestAttribute(Const.ATTR_CLIENT) Client client,
+                                                @RequestBody @Valid SystemdSnapshotVO vo) {
+        systemdSnapshotService.ingest(client.getId(), vo);
+        return RestBean.success();
+    }
+
+    /**
+     * 客户端上报 SMART 磁盘健康快照。
+     *
+     * @param client 当前客户端
+     * @param vo 快照载荷
+     * @return 处理结果
+     */
+    @PostMapping("/smart")
+    public RestBean<Void> updateSmartSnapshot(@RequestAttribute(Const.ATTR_CLIENT) Client client,
+                                              @RequestBody @Valid SmartSnapshotVO vo) {
+        smartSnapshotService.ingest(client.getId(), vo);
+        return RestBean.success();
+    }
+
+    /**
+     * 客户端上报进程快照（Top N + watched pattern 状态）。
+     *
+     * @param client 当前客户端
+     * @param vo 快照载荷
+     * @return 处理结果
+     */
+    @PostMapping("/process")
+    public RestBean<Void> updateProcessSnapshot(@RequestAttribute(Const.ATTR_CLIENT) Client client,
+                                                @RequestBody @Valid ProcessSnapshotVO vo) {
+        processSnapshotService.ingest(client.getId(), vo);
+        return RestBean.success();
+    }
+
+    /**
+     * 客户端上报 NVIDIA GPU 快照。
+     *
+     * @param client 当前客户端
+     * @param vo 快照载荷
+     * @return 处理结果
+     */
+    @PostMapping("/gpu")
+    public RestBean<Void> updateGpuSnapshot(@RequestAttribute(Const.ATTR_CLIENT) Client client,
+                                            @RequestBody @Valid GpuSnapshotVO vo) {
+        gpuSnapshotService.ingest(client.getId(), vo);
         return RestBean.success();
     }
 

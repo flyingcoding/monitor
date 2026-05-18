@@ -24,4 +24,6 @@ public class ClientPreviewVO {
     double memoryUsage;
     double networkUpload;
     double networkDownload;
+    /** v1.3：客户端采集能力 JSON，用于 Manage 列表显示能力徽章。 */
+    String capabilitiesJson;
 }

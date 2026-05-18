@@ -3,6 +3,10 @@ package com.example.config;
 import com.example.controller.SseController;
 import com.example.entity.vo.request.RuntimeDetailVO;
 import com.example.entity.vo.response.AlertHistoryVO;
+import com.example.entity.vo.response.GpuSnapshotResponseVO;
+import com.example.entity.vo.response.ProcessSnapshotResponseVO;
+import com.example.entity.vo.response.SmartSnapshotResponseVO;
+import com.example.entity.vo.response.SystemdSnapshotResponseVO;
 import jakarta.annotation.Resource;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.context.annotation.Lazy;
@@ -46,5 +50,49 @@ public class LocalSseEventBus implements SseEventBus {
     @Override
     public void publishAlertFired(AlertHistoryVO vo) {
         sseController.pushAlertFired(vo);
+    }
+
+    /**
+     * 向本地 SSE 控制器发布 systemd 快照事件。
+     *
+     * @param clientId 客户端ID
+     * @param vo 快照响应 VO
+     */
+    @Override
+    public void publishSystemdSnapshot(int clientId, SystemdSnapshotResponseVO vo) {
+        sseController.pushSystemdSnapshot(clientId, vo);
+    }
+
+    /**
+     * 向本地 SSE 控制器发布 SMART 快照事件。
+     *
+     * @param clientId 客户端ID
+     * @param vo 快照响应 VO
+     */
+    @Override
+    public void publishSmartSnapshot(int clientId, SmartSnapshotResponseVO vo) {
+        sseController.pushSmartSnapshot(clientId, vo);
+    }
+
+    /**
+     * 向本地 SSE 控制器发布进程快照事件。
+     *
+     * @param clientId 客户端ID
+     * @param vo 快照响应 VO
+     */
+    @Override
+    public void publishProcessSnapshot(int clientId, ProcessSnapshotResponseVO vo) {
+        sseController.pushProcessSnapshot(clientId, vo);
+    }
+
+    /**
+     * 向本地 SSE 控制器发布 NVIDIA GPU 快照事件。
+     *
+     * @param clientId 客户端ID
+     * @param vo 快照响应 VO
+     */
+    @Override
+    public void publishGpuSnapshot(int clientId, GpuSnapshotResponseVO vo) {
+        sseController.pushGpuSnapshot(clientId, vo);
     }
 }

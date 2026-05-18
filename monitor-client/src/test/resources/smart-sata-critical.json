@@ -1,0 +1,45 @@
+{
+  "model_name": "Generic SATA Disk",
+  "serial_number": "FAILING1234",
+  "device": {
+    "name": "/dev/sdb",
+    "type": "sat"
+  },
+  "ata_smart_attributes": {
+    "revision": 1,
+    "table": [
+      {
+        "id": 5,
+        "name": "Reallocated_Sector_Ct",
+        "value": 80,
+        "worst": 80,
+        "thresh": 10,
+        "raw": {"value": 42, "string": "42"}
+      },
+      {
+        "id": 194,
+        "name": "Temperature_Celsius",
+        "value": 30,
+        "worst": 20,
+        "thresh": 0,
+        "raw": {"value": 78, "string": "78"}
+      },
+      {
+        "id": 197,
+        "name": "Current_Pending_Sector",
+        "value": 95,
+        "worst": 95,
+        "thresh": 0,
+        "raw": {"value": 4, "string": "4"}
+      },
+      {
+        "id": 198,
+        "name": "Offline_Uncorrectable",
+        "value": 99,
+        "worst": 99,
+        "thresh": 0,
+        "raw": {"value": 1, "string": "1"}
+      }
+    ]
+  }
+}

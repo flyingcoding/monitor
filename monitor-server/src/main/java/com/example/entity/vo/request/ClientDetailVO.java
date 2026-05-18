@@ -29,4 +29,6 @@ public class ClientDetailVO {
     double disk;
     @NotNull
     String ip;
+    /** v1.3：客户端采集能力 JSON（可选，老客户端未升级时为 null）。 */
+    String capabilitiesJson;
 }

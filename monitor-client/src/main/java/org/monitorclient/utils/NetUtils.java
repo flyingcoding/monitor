@@ -3,6 +3,10 @@ package org.monitorclient.utils;
 import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONObject;
 import lombok.extern.slf4j.Slf4j;
+import org.monitorclient.collector.GpuStat;
+import org.monitorclient.collector.ProcessSnapshot;
+import org.monitorclient.collector.SmartStat;
+import org.monitorclient.collector.SystemdUnitStat;
 import org.monitorclient.entity.BaseDetail;
 import org.monitorclient.entity.ConnectionConfig;
 import org.monitorclient.entity.Response;
@@ -12,7 +16,9 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 @Slf4j
 public class NetUtils {
@@ -93,6 +99,98 @@ public class NetUtils {
             log.info("已通知服务端客户端下线");
         } else {
             log.warn("通知服务端下线失败：{}", response.message());
+        }
+    }
+
+    /**
+     * 上报 systemd unit 状态快照。
+     * <p>
+     * v1.3 systemd 模块的详情面板使用。失败仅 warn 日志，不阻塞采集主循环。
+     *
+     * @param snapshot unit 状态列表
+     */
+    public void postSystemdSnapshot(List<SystemdUnitStat> snapshot) {
+        if (snapshot == null) {
+            return;
+        }
+        try {
+            Map<String, Object> payload = new HashMap<>();
+            payload.put("units", snapshot);
+            Response response = this.doPost("/systemd", payload);
+            if (!response.success()) {
+                log.warn("systemd 详情快照上报失败：{}", response.message());
+            }
+        } catch (Exception e) {
+            log.warn("systemd 详情快照上报异常：{}", e.getMessage());
+        }
+    }
+
+    /**
+     * 上报 SMART 磁盘健康快照。
+     * <p>
+     * v1.3 SMART 模块的详情面板使用。失败仅 warn 日志，不阻塞采集主循环。
+     *
+     * @param snapshot 磁盘 SMART 状态列表
+     */
+    public void postSmartSnapshot(List<SmartStat> snapshot) {
+        if (snapshot == null) {
+            return;
+        }
+        try {
+            Map<String, Object> payload = new HashMap<>();
+            payload.put("disks", snapshot);
+            Response response = this.doPost("/smart", payload);
+            if (!response.success()) {
+                log.warn("SMART 详情快照上报失败：{}", response.message());
+            }
+        } catch (Exception e) {
+            log.warn("SMART 详情快照上报异常：{}", e.getMessage());
+        }
+    }
+
+    /**
+     * 上报 NVIDIA GPU 快照。
+     * <p>
+     * v1.3 GPU 模块的详情面板使用，与 RuntimeDetail 分离上报（避免污染基础时序数据，
+     * 并允许服务端独立 Caffeine 缓存 + SSE 推送）。失败仅 warn 日志，不阻塞采集主循环。
+     *
+     * @param snapshot GPU 数据列表，空列表也会上报（用于服务端清空缓存）
+     */
+    public void postGpuSnapshot(List<GpuStat> snapshot) {
+        if (snapshot == null) {
+            return;
+        }
+        try {
+            Map<String, Object> payload = new HashMap<>();
+            payload.put("gpus", snapshot);
+            Response response = this.doPost("/gpu", payload);
+            if (!response.success()) {
+                log.warn("GPU 详情快照上报失败：{}", response.message());
+            }
+        } catch (Exception e) {
+            log.warn("GPU 详情快照上报异常：{}", e.getMessage());
+        }
+    }
+
+    /**
+     * 上报进程快照（与 RuntimeDetail 分离上报，频率一致，10s 一次）。
+     * <p>
+     * v1.3 进程监控模块详情面板使用。失败仅 debug 日志，不写本地缓存：即使丢失个别周期，
+     * RuntimeDetail 中的 watchedProcessMissing 仍然能驱动告警，进程详情容忍少量丢失。
+     *
+     * @param snapshot 进程快照
+     */
+    public void postProcessSnapshot(ProcessSnapshot snapshot) {
+        if (snapshot == null) {
+            return;
+        }
+        try {
+            Response response = this.doPost("/process", snapshot);
+            if (!response.success()) {
+                log.debug("进程详情快照上报失败：{}", response.message());
+            }
+        } catch (Exception e) {
+            log.debug("进程详情快照上报异常：{}", e.getMessage());
         }
     }
 

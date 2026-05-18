@@ -1,0 +1,25 @@
+{
+  "model_name": "Samsung SSD 970 EVO 1TB",
+  "serial_number": "S5H9NX0M654321W",
+  "device": {
+    "name": "/dev/nvme0n1",
+    "type": "nvme"
+  },
+  "nvme_smart_health_information_log": {
+    "critical_warning": 0,
+    "temperature": 313,
+    "available_spare": 100,
+    "available_spare_threshold": 10,
+    "percentage_used": 5,
+    "data_units_read": 12345,
+    "data_units_written": 67890,
+    "host_reads": 12000000,
+    "host_writes": 8000000,
+    "controller_busy_time": 0,
+    "power_cycles": 320,
+    "power_on_hours": 15000,
+    "unsafe_shutdowns": 2,
+    "media_errors": 0,
+    "num_err_log_entries": 0
+  }
+}
