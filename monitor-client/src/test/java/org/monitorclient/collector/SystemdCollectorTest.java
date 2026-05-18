@@ -20,12 +20,13 @@ import java.util.concurrent.atomic.AtomicInteger;
  * <ul>
  *   <li>非 systemd 系统（systemctl 不可用）→ available=false 且字段保持 null；</li>
  *   <li>未配置 units → enabled=false，整个模块禁用；</li>
- *   <li>active + running unit → healthy=true，failedCount=0；</li>
+ *   <li>loaded + active unit → healthy=true，failedCount=0；</li>
+ *   <li>oneshot 常见 active + exited unit → healthy=true；</li>
  *   <li>inactive unit → healthy=false，failedCount 增加；</li>
  *   <li>failed unit → healthy=false，failedCount 增加；</li>
  *   <li>not-loaded（LoadState=not-found）unit → healthy=false；</li>
  *   <li>masked unit → healthy=false；</li>
- *   <li>多 unit 混合 → 仅 active+running 计为 healthy；</li>
+ *   <li>多 unit 混合 → 仅 loaded+active 计为 healthy；</li>
  *   <li>非法 unit 名（含 shell 元字符）→ 在 parseUnits 阶段被丢弃；</li>
  *   <li>单 unit 执行超时 → 跳过该 unit，不影响其他 unit；</li>
  *   <li>snapshot 返回的列表与 enhance 内累计一致。</li>
@@ -130,6 +131,26 @@ class SystemdCollectorTest {
         Assertions.assertTrue(snapshot.get(1).isHealthy());
         Assertions.assertEquals("nginx", snapshot.get(0).getName());
         Assertions.assertEquals("A high performance web server", snapshot.get(0).getDescription());
+    }
+
+    @Test
+    void enhance_shouldTreatActiveExitedOneshotAsHealthy() {
+        FixtureExecutor executor = new FixtureExecutor();
+        executor.stdoutByUnit.put("backup", """
+                LoadState=loaded
+                ActiveState=active
+                SubState=exited
+                Description=Nightly backup oneshot
+                """);
+
+        SystemdCollector collector = new SystemdCollector(executor, config("backup"));
+        RuntimeDetail runtime = new RuntimeDetail();
+        collector.enhance(runtime);
+
+        Assertions.assertEquals(Integer.valueOf(0), runtime.getSystemdFailedCount());
+        SystemdUnitStat stat = collector.snapshot().get(0);
+        Assertions.assertTrue(stat.isHealthy());
+        Assertions.assertEquals("exited", stat.getSubState());
     }
 
     @Test

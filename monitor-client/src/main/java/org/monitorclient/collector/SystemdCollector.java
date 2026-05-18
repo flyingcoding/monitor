@@ -205,9 +205,23 @@ public class SystemdCollector implements MetricCollector {
                 }
             }
         }
-        stat.setHealthy("active".equalsIgnoreCase(stat.getActiveState())
-                && "running".equalsIgnoreCase(stat.getSubState()));
+        stat.setHealthy(isHealthy(stat));
         return stat;
+    }
+
+    /**
+     * 判断 systemd unit 是否处于健康状态。
+     * <p>
+     * oneshot、timer 等 unit 成功后可能保持 {@code ActiveState=active} 且
+     * {@code SubState=exited/waiting}，因此健康判断只依赖加载状态和活动状态。
+     *
+     * @param stat unit 状态
+     * @return unit 已加载且处于 active 状态时返回 true
+     */
+    private static boolean isHealthy(SystemdUnitStat stat) {
+        return stat != null
+                && "loaded".equalsIgnoreCase(stat.getLoadState())
+                && "active".equalsIgnoreCase(stat.getActiveState());
     }
 
     /**
