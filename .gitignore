@@ -13,3 +13,4 @@ log
 /.agents/
 /.cursor/
 /.trellis/
+/.sdkmanrc

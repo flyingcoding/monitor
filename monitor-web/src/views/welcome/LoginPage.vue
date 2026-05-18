@@ -107,6 +107,7 @@ function loginWithOidc(providerName) {
  * 解析 query 参数，处理 OIDC 回调：
  *   - oidc_token + expire 命中 → 持久化 token 并跳 /index
  *   - oidc_error + message 命中 → ElMessage 报错
+ *   - oidc_bound 命中 → 展示绑定结果并跳回安全设置页
  */
 function handleOidcCallback() {
   const params = new URLSearchParams(window.location.search)
@@ -141,11 +142,13 @@ function handleOidcCallback() {
   if (boundFlag === '1') {
     ElMessage.success(`已成功绑定 ${params.get('provider') || ''}`)
     window.history.replaceState({}, '', window.location.pathname)
+    router.push('/index/security')
     return
   }
   if (boundFlag === '0') {
     ElMessage.error(message || 'OIDC 绑定失败')
     window.history.replaceState({}, '', window.location.pathname)
+    router.push('/index/security')
     return
   }
   if (error) {

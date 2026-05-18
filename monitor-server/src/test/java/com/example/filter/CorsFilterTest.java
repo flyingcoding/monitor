@@ -60,6 +60,21 @@ class CorsFilterTest {
     }
 
     /**
+     * API Token 推荐走 X-Api-Token，自定义头必须出现在 CORS 允许列表里。
+     */
+    @Test
+    void allowHeadersShouldIncludeApiTokenHeader() throws Exception {
+        CorsFilter f = newCorsFilter("*");
+        Map<String, String> respHeaders = new HashMap<>();
+        f.doFilter(stubReq("https://client.example.com"), stubResp(respHeaders), (req, resp) -> {});
+
+        String allowHeaders = respHeaders.get("Access-Control-Allow-Headers");
+        Assertions.assertNotNull(allowHeaders);
+        Assertions.assertTrue(allowHeaders.contains("X-Api-Token"),
+                "API Token 自定义头必须允许跨域预检");
+    }
+
+    /**
      * AC12：白名单外的 Origin 不应回写 ACAO 头。
      */
     @Test

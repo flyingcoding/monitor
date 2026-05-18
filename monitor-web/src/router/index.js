@@ -2,6 +2,22 @@ import { createRouter, createWebHistory } from 'vue-router'
 import { unauthorized } from '@/net'
 import { useStore } from '@/store'
 
+const OIDC_CALLBACK_QUERY_KEYS = ['oidc_token', 'oidc_error', 'oidc_bound']
+
+/**
+ * 判断 welcome 路由是否携带 OIDC 回调信号，避免已登录用户的绑定回调被直接重定向吞掉。
+ *
+ * @param {import('vue-router').RouteLocationNormalized} to 目标路由
+ * @returns {boolean} 是否为 OIDC 回调路由
+ */
+function isWelcomeOidcCallback(to) {
+  if (!to.name || !to.name.toString().startsWith('welcome')) {
+    return false
+  }
+  const query = to.query || {}
+  return OIDC_CALLBACK_QUERY_KEYS.some((key) => Object.prototype.hasOwnProperty.call(query, key))
+}
+
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
@@ -87,7 +103,9 @@ router.beforeEach((to, from, next) => {
     return
   }
   const isUnauthorized = unauthorized()
-  if (to.name && to.name.toString().startsWith('welcome') && !isUnauthorized) {
+  if (isWelcomeOidcCallback(to)) {
+    next()
+  } else if (to.name && to.name.toString().startsWith('welcome') && !isUnauthorized) {
     next('/index')
   } else if (to.fullPath.startsWith('/index') && isUnauthorized) {
     next('/')

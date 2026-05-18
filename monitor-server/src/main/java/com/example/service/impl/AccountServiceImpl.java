@@ -154,6 +154,8 @@ public class AccountServiceImpl extends ServiceImpl<AccountMapper, Account> impl
     @Override
     public boolean changePassword(int id, String oldPass, String newPass) {
         Account account=this.getById(id);
+        if (account == null || account.getPassword() == null || account.getPassword().isBlank())
+            return false;
         String password=account.getPassword();
         if (!passwordEncoder.matches(oldPass,password))
             return false;
@@ -288,9 +290,10 @@ public class AccountServiceImpl extends ServiceImpl<AccountMapper, Account> impl
             if (bound != null) {
                 return bound;
             }
-            // 绑定行存在但账号被删，落入新流程
-            log.warn("OIDC 绑定 (provider={}, sub={}) 指向账号 {} 已被删除，落入解析流程",
-                    provider, subject, existing.getAccountId());
+            // 绑定行存在但账号被删，先清理孤儿绑定，避免后续 bindIfFree 永久冲突。
+            int removed = existing.getId() == null ? 0 : accountOidcBindingMapper.deleteById(existing.getId());
+            log.warn("OIDC 绑定 (provider={}, sub={}) 指向账号 {} 已被删除，清理绑定行 id={} removed={} 后落入解析流程",
+                    provider, subject, existing.getAccountId(), existing.getId(), removed);
         }
 
         // 2. 邮件校验

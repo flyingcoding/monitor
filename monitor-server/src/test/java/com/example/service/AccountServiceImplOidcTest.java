@@ -10,6 +10,7 @@ import com.example.entity.dto.AccountOidcBinding;
 import com.example.mapper.AccountMapper;
 import com.example.mapper.AccountOidcBindingMapper;
 import com.example.service.impl.AccountServiceImpl;
+import com.example.utils.PasswordPolicyValidator;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -111,22 +112,20 @@ class AccountServiceImplOidcTest {
                         Wrapper<?> w = (Wrapper<?>) args[0];
                         // 通过 AbstractWrapper 暴露的 paramNameValuePairs 拿到 ?-binding 值
                         Map<String, Object> params = ((AbstractWrapper<?, ?, ?>) w).getParamNameValuePairs();
-                        // 我们的 Wrappers.<>query().eq("provider_name", p).eq("subject", s) 会按插入顺序绑定参数
-                        // 取所有 String 类型按顺序匹配 (provider, subject)
-                        String provider = null;
-                        String subject = null;
-                        for (Map.Entry<String, Object> e : new java.util.TreeMap<>(params).entrySet()) {
-                            if (e.getValue() instanceof String s) {
-                                if (provider == null) provider = s;
-                                else if (subject == null) subject = s;
-                            }
+                        // 本测试类每个用例最多只放入一条绑定行，直接返回即可稳定覆盖绑定分支。
+                        if (bindingRows.size() == 1) {
+                            return bindingRows.get(0);
                         }
                         for (AccountOidcBinding row : bindingRows) {
-                            if (java.util.Objects.equals(row.getProviderName(), provider)
-                                    && java.util.Objects.equals(row.getSubject(), subject)) {
+                            if (params.values().contains(row.getProviderName())
+                                    && params.values().contains(row.getSubject())) {
                                 return row;
                             }
                         }
+                    }
+                    if ("deleteById".equals(method.getName())) {
+                        long id = ((Number) args[0]).longValue();
+                        return bindingRows.removeIf(row -> row.getId() != null && row.getId() == id) ? 1 : 0;
                     }
                     return null;
                 });
@@ -143,6 +142,10 @@ class AccountServiceImplOidcTest {
                     return null;
                 });
         ReflectionTestUtils.setField(service, "passwordEncoder", encoder);
+
+        PasswordPolicyValidator validator = new PasswordPolicyValidator();
+        ReflectionTestUtils.setField(validator, "policy", "none");
+        ReflectionTestUtils.setField(service, "passwordPolicyValidator", validator);
     }
 
     /**
@@ -150,6 +153,7 @@ class AccountServiceImplOidcTest {
      */
     @Test
     void existingBindingShouldReturnLinkedAccount() {
+        oidcProperties.setLinkExistingByEmail(false);
         Account a = new Account(7, "user7", "pwd", "u7@example.com",
                 "user", "[]", new Date(), Boolean.TRUE);
         accountRows.add(a);
@@ -165,6 +169,44 @@ class AccountServiceImplOidcTest {
         Account result = service.resolveOrCreateByOidc("github", "sub-7", "u7@example.com", Boolean.TRUE);
         Assertions.assertNotNull(result);
         Assertions.assertEquals(7, result.getId());
+    }
+
+    /**
+     * 已绑定行指向不存在账号时，应先删除孤儿绑定，避免后续 bindIfFree 永久冲突。
+     */
+    @Test
+    void orphanBindingShouldBeRemovedBeforeContinuingOidcFlow() {
+        oidcProperties.setAutoCreateUser(true);
+        oidcProperties.setLinkExistingByEmail(false);
+        AccountOidcBinding orphan = new AccountOidcBinding();
+        orphan.setId(2L);
+        orphan.setAccountId(404);
+        orphan.setProviderName("github");
+        orphan.setSubject("sub-orphan");
+        orphan.setEmail("old@example.com");
+        orphan.setBoundAt(new Date());
+        bindingRows.add(orphan);
+
+        Account result = service.resolveOrCreateByOidc("github", "sub-orphan", "new@example.com", Boolean.TRUE);
+
+        Assertions.assertNotNull(result);
+        Assertions.assertEquals("new@example.com", result.getEmail());
+        Assertions.assertTrue(bindingRows.isEmpty(), "孤儿 OIDC 绑定应在继续登录流程前被删除");
+    }
+
+    /**
+     * OIDC 自动建号没有本地密码，修改密码应返回 false 而不是触发 PasswordEncoder NPE。
+     */
+    @Test
+    void changePasswordShouldReturnFalseWhenAccountHasNoLocalPassword() {
+        Account a = new Account(12, "oidc-user", null, "oidc@example.com",
+                "user", "[]", new Date(), Boolean.TRUE);
+        accountRows.add(a);
+
+        boolean result = Assertions.assertDoesNotThrow(() ->
+                service.changePassword(12, "old-pass", "new-pass"));
+
+        Assertions.assertFalse(result);
     }
 
     /**
