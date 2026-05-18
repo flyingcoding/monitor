@@ -36,7 +36,7 @@ import java.util.List;
  *   <li>从 {@link OidcUser} 取 subject / email / email_verified；</li>
  *   <li>调用 {@link AccountService#resolveOrCreateByOidc} 解析或创建账号（D3）；</li>
  *   <li>调用 {@link AccountOidcBindingService#upsert} 写绑定（已绑则刷新 email）；</li>
- *   <li>用 {@link JwtUtils#createJwt} 生成 JWT，redirect 到 {@code /?oidc_token=...&expire=...} 由前端持久化。</li>
+ *   <li>用 {@link JwtUtils#createJwt} 生成 JWT，redirect 到 {@code /#oidc_token=...&expire=...} 由前端持久化。</li>
  * </ol>
  *
  * <p>{@link OidcLoginException} 不在本类中处理，由失败 handler 接管（Spring Security 在抛出
@@ -170,8 +170,9 @@ public class OidcSuccessHandler implements AuthenticationSuccessHandler {
         request.setAttribute(Const.ATTR_AUTH_METHOD, Const.AUTH_METHOD_OIDC);
         log.info("OIDC 登录成功 accountId={} provider={} username={}", account.getId(), provider, account.getUsername());
 
-        // 重定向到根路径，前端登录页拦截 query 参数并持久化到 storage
-        String redirect = "/?oidc_token=" + URLEncoder.encode(jwt, StandardCharsets.UTF_8)
+        // 重定向到根路径，前端登录页从 URL fragment 读取并持久化到 storage。
+        // fragment 不会进入 HTTP 请求行，避免 JWT 出现在反向代理 / access log / Referer 中。
+        String redirect = "/#oidc_token=" + URLEncoder.encode(jwt, StandardCharsets.UTF_8)
                 + "&expire=" + expire.getTime();
         response.sendRedirect(redirect);
     }

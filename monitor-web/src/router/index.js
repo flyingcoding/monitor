@@ -2,7 +2,22 @@ import { createRouter, createWebHistory } from 'vue-router'
 import { unauthorized } from '@/net'
 import { useStore } from '@/store'
 
-const OIDC_CALLBACK_QUERY_KEYS = ['oidc_token', 'oidc_error', 'oidc_bound']
+const OIDC_CALLBACK_KEYS = ['oidc_token', 'oidc_error', 'oidc_bound']
+
+/**
+ * 判断 hash fragment 是否携带 OIDC 回调信号。登录 token 使用 fragment 传递，避免进入服务端访问日志。
+ *
+ * @param {string} hash route hash，例如 "#oidc_token=..."
+ * @returns {boolean} 是否包含 OIDC 回调 key
+ */
+function hasOidcCallbackHash(hash) {
+  if (!hash) return false
+  const payload = hash.startsWith('#') ? hash.slice(1) : hash
+  const normalized = payload.startsWith('?') ? payload.slice(1) : payload
+  if (!normalized) return false
+  const params = new URLSearchParams(normalized)
+  return OIDC_CALLBACK_KEYS.some((key) => params.has(key))
+}
 
 /**
  * 判断 welcome 路由是否携带 OIDC 回调信号，避免已登录用户的绑定回调被直接重定向吞掉。
@@ -15,7 +30,10 @@ function isWelcomeOidcCallback(to) {
     return false
   }
   const query = to.query || {}
-  return OIDC_CALLBACK_QUERY_KEYS.some((key) => Object.prototype.hasOwnProperty.call(query, key))
+  return (
+    OIDC_CALLBACK_KEYS.some((key) => Object.prototype.hasOwnProperty.call(query, key)) ||
+    hasOidcCallbackHash(to.hash)
+  )
 }
 
 const router = createRouter({

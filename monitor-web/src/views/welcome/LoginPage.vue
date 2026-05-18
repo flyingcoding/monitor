@@ -105,12 +105,29 @@ function loginWithOidc(providerName) {
 
 /**
  * 解析 query 参数，处理 OIDC 回调：
- *   - oidc_token + expire 命中 → 持久化 token 并跳 /index
+ *   - fragment/query 中 oidc_token + expire 命中 → 持久化 token 并跳 /index
  *   - oidc_error + message 命中 → ElMessage 报错
  *   - oidc_bound 命中 → 展示绑定结果并跳回安全设置页
  */
-function handleOidcCallback() {
+function readOidcCallbackParams() {
   const params = new URLSearchParams(window.location.search)
+  const hash = window.location.hash || ''
+  const payload = hash.startsWith('#') ? hash.slice(1) : hash
+  const normalized = payload.startsWith('?') ? payload.slice(1) : payload
+  if (normalized) {
+    const hashParams = new URLSearchParams(normalized)
+    hashParams.forEach((value, key) => {
+      if (!params.has(key)) params.set(key, value)
+    })
+  }
+  return params
+}
+
+/**
+ * 解析 OIDC 回调参数并执行对应 UI 跳转。
+ */
+function handleOidcCallback() {
+  const params = readOidcCallbackParams()
   const token = params.get('oidc_token')
   const expire = params.get('expire')
   const error = params.get('oidc_error')

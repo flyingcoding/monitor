@@ -138,6 +138,24 @@ class OidcSuccessHandlerConflictTest {
                 "P2-2：冲突时绝不能签发 JWT");
     }
 
+    /**
+     * 登录成功时 JWT 必须放在 URL fragment，避免进入 HTTP 请求 URL 和服务端访问日志。
+     */
+    @Test
+    void loginSuccessRedirectsTokenInFragment() throws Exception {
+        StubResponse response = new StubResponse();
+        Authentication auth = buildOidcAuth("github", "sub-ok");
+
+        handler.onAuthenticationSuccess(requestWithSession(null), response, auth);
+
+        Assertions.assertNotNull(response.redirectedTo);
+        Assertions.assertTrue(response.redirectedTo.startsWith("/#oidc_token="),
+                "OIDC 登录 token 必须通过 fragment 传递，实际：" + response.redirectedTo);
+        Assertions.assertTrue(response.redirectedTo.contains("&expire="));
+        Assertions.assertFalse(response.redirectedTo.contains("?oidc_token="),
+                "OIDC 登录 token 不允许出现在 query 中");
+    }
+
     private static OAuth2AuthenticationToken buildOidcAuth(String provider, String subject) {
         Map<String, Object> claims = new HashMap<>();
         claims.put("sub", subject);

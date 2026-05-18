@@ -2,11 +2,13 @@ package com.example.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.example.entity.dto.AccountOidcBinding;
 import com.example.entity.dto.OidcProvider;
 import com.example.entity.vo.request.OidcProviderCreateVO;
 import com.example.entity.vo.request.OidcProviderUpdateVO;
 import com.example.entity.vo.response.OidcProviderPublicVO;
 import com.example.entity.vo.response.OidcProviderVO;
+import com.example.mapper.AccountOidcBindingMapper;
 import com.example.mapper.OidcProviderMapper;
 import com.example.service.OidcProviderService;
 import com.example.utils.CryptoUtils;
@@ -14,11 +16,13 @@ import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.util.Date;
 import java.util.List;
+import java.util.Objects;
 
 /**
  * OIDC Provider 管理服务实现。
@@ -38,6 +42,9 @@ public class OidcProviderServiceImpl
 
     @Resource
     private CryptoUtils cryptoUtils;
+
+    @Resource
+    private AccountOidcBindingMapper accountOidcBindingMapper;
 
     /**
      * 用 ObjectProvider 包裹避免循环依赖；事件发布器在所有 Spring 上下文中始终存在。
@@ -95,7 +102,11 @@ public class OidcProviderServiceImpl
     public OidcProviderVO update(Long id, OidcProviderUpdateVO vo) {
         OidcProvider existing = this.getById(id);
         if (existing == null) {
-            throw new ResponseStatusException(org.springframework.http.HttpStatus.NOT_FOUND, "Provider 不存在");
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Provider 不存在");
+        }
+        if (isIssuerChanged(existing, vo) && hasBindings(existing.getName())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "Provider 已有账号绑定，不能修改 Issuer URL，请先迁移或解除相关绑定");
         }
         existing.setDisplayName(vo.getDisplayName());
         existing.setIconUrl(vo.getIconUrl());
@@ -112,6 +123,26 @@ public class OidcProviderServiceImpl
         log.info("OIDC Provider 更新 id={} name={}", existing.getId(), existing.getName());
         publishChanged();
         return toAdminVO(existing);
+    }
+
+    /**
+     * 判断更新请求是否会改变 OIDC issuer。issuer 是 (provider, subject) 绑定的安全边界，
+     * 有历史绑定时不允许静默切换到另一个 IdP。
+     */
+    private boolean isIssuerChanged(OidcProvider existing, OidcProviderUpdateVO vo) {
+        return !Objects.equals(existing.getIssuerUrl(), vo.getIssuerUrl());
+    }
+
+    /**
+     * 查询指定 Provider name 是否已经存在账号绑定。
+     */
+    private boolean hasBindings(String providerName) {
+        if (providerName == null || providerName.isBlank()) {
+            return false;
+        }
+        Long count = accountOidcBindingMapper.selectCount(new QueryWrapper<AccountOidcBinding>()
+                .eq("provider_name", providerName));
+        return count != null && count > 0;
     }
 
     @Override

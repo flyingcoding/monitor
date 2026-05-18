@@ -5,6 +5,7 @@ import com.example.entity.vo.request.OidcProviderCreateVO;
 import com.example.entity.vo.request.OidcProviderUpdateVO;
 import com.example.entity.vo.response.OidcProviderPublicVO;
 import com.example.entity.vo.response.OidcProviderVO;
+import com.example.mapper.AccountOidcBindingMapper;
 import com.example.mapper.OidcProviderMapper;
 import com.example.service.impl.OidcProviderServiceImpl;
 import com.example.utils.CryptoUtils;
@@ -44,6 +45,7 @@ class OidcProviderServiceImplTest {
     private OidcProviderServiceImpl service;
     private final List<OidcProvider> rows = new ArrayList<>();
     private final AtomicLong idSeq = new AtomicLong(1L);
+    private final AtomicLong bindingCount = new AtomicLong(0L);
     private final AtomicReference<Object> lastPublishedEvent = new AtomicReference<>();
     private CryptoUtils cryptoUtils;
 
@@ -55,6 +57,7 @@ class OidcProviderServiceImplTest {
 
         rows.clear();
         idSeq.set(1L);
+        bindingCount.set(0L);
         lastPublishedEvent.set(null);
 
         service = new OidcProviderServiceImpl();
@@ -162,6 +165,17 @@ class OidcProviderServiceImplTest {
                 });
         ReflectionTestUtils.setField(spy, "baseMapper", mapper);
 
+        AccountOidcBindingMapper bindingMapper = (AccountOidcBindingMapper) Proxy.newProxyInstance(
+                AccountOidcBindingMapper.class.getClassLoader(),
+                new Class[]{AccountOidcBindingMapper.class},
+                (proxy, method, args) -> {
+                    if ("selectCount".equals(method.getName())) {
+                        return bindingCount.get();
+                    }
+                    return null;
+                });
+        ReflectionTestUtils.setField(spy, "accountOidcBindingMapper", bindingMapper);
+
         @SuppressWarnings("unchecked")
         ObjectProvider<ApplicationEventPublisher> publisherProvider =
                 (ObjectProvider<ApplicationEventPublisher>) Proxy.newProxyInstance(
@@ -266,6 +280,39 @@ class OidcProviderServiceImplTest {
         s.update(existing.getId(), vo);
         OidcProvider stored = s.getById(existing.getId());
         Assertions.assertEquals("rotated-secret", cryptoUtils.decrypt(stored.getClientSecretEnc()));
+    }
+
+    /**
+     * Provider 已存在账号绑定时禁止修改 issuer，避免同一 provider name 下复用旧 sub 绑定。
+     */
+    @Test
+    void updateIssuerWithExistingBindingsShouldConflict() {
+        OidcProviderServiceImpl s = spyWithInMemoryCollection();
+        OidcProvider existing = new OidcProvider();
+        existing.setName("github");
+        existing.setIssuerUrl("https://old-issuer");
+        existing.setClientId("id");
+        existing.setClientSecretEnc(cryptoUtils.encrypt("secret"));
+        existing.setScopes("openid");
+        existing.setEnabled(Boolean.TRUE);
+        s.save(existing);
+        bindingCount.set(1L);
+
+        OidcProviderUpdateVO vo = new OidcProviderUpdateVO();
+        vo.setDisplayName("GitHub");
+        vo.setIssuerUrl("https://new-issuer");
+        vo.setClientId("id");
+        vo.setClientSecret("");
+        vo.setScopes("openid");
+        vo.setEnabled(Boolean.TRUE);
+
+        ResponseStatusException ex = Assertions.assertThrows(ResponseStatusException.class,
+                () -> s.update(existing.getId(), vo));
+
+        Assertions.assertEquals(org.springframework.http.HttpStatus.CONFLICT, ex.getStatusCode());
+        OidcProvider stored = s.getById(existing.getId());
+        Assertions.assertEquals("https://old-issuer", stored.getIssuerUrl(),
+                "issuer 修改被拒时不应污染内存实体或持久化行");
     }
 
     /**
