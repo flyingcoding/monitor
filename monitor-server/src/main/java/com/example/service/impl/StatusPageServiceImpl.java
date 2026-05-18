@@ -10,7 +10,7 @@ import com.example.entity.vo.response.StatusPageSummaryVO;
 import com.example.mapper.StatusPageConfigMapper;
 import com.example.service.ClientService;
 import com.example.service.StatusPageService;
-import com.example.utils.InfluxDbUtils;
+import com.example.tsdb.TimeSeriesAdapter;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import jakarta.annotation.Resource;
@@ -36,7 +36,7 @@ import java.util.stream.Collectors;
  * 写入路径 {@link #updateConfig} 主动 {@link Cache#invalidate(Object)} 让下一次 GET 立刻反映新配置。
  *
  * <h3>InfluxDB 失败兜底</h3>
- * <p>{@link #computeSummary()} 在调用 {@link InfluxDbUtils#readAvailabilityBuckets(int)} 抛出异常时，
+ * <p>{@link #computeSummary()} 在调用 {@link TimeSeriesAdapter#readAvailabilityBuckets(int)} 抛出异常时，
  * 不让 {@code /api/status/summary} 整体 500：单个 client 走 {@code null} availability 兜底，
  * 前端展示"数据不足"占位。日志记录第一次失败用以辨别原因。
  *
@@ -64,7 +64,7 @@ public class StatusPageServiceImpl
     private ClientService clientService;
 
     @Resource
-    private InfluxDbUtils influxDbUtils;
+    private TimeSeriesAdapter influxDbUtils;
 
     @Value("${monitor.status-page.cache-ttl-seconds:30}")
     private long cacheTtlSeconds;

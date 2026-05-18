@@ -1,4 +1,4 @@
-package com.example.utils;
+package com.example.tsdb;
 
 import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONObject;
@@ -17,6 +17,7 @@ import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -33,9 +34,40 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.locks.ReentrantLock;
 
+/**
+ * 默认 {@link TimeSeriesAdapter} 实现，封装 InfluxDB 2.x 客户端。
+ *
+ * <p>v2.0-alpha 之前的 {@code InfluxDbUtils} 的全部能力（写入、断路器降级、JSONL 缓冲与定时重放、
+ * 历史与可用率查询）均迁入此类。当 {@code monitor.tsdb.provider=influxdb}（默认）时由
+ * {@link TsdbAdapterFactory} 注入；当配置为其他值（如 {@code victoria-metrics}）时，工厂仍以
+ * 本类作为回落实现。
+ *
+ * <h3>写入路径</h3>
+ * <ul>
+ *   <li>{@link #writeRuntime} / {@link #writeOtlpMetric} 都调用 {@link #doWriteRuntimeData}。</li>
+ *   <li>外层包装 {@code @CircuitBreaker(name="influxdb", fallbackMethod=...)}，断路器配置见
+ *       {@code application-{dev,prod}.yml} 的 {@code resilience4j.circuitbreaker.instances.influxdb}。</li>
+ *   <li>断路器开启时 {@link #writeToFileBuffer} 把记录追加到 {@code monitor.influx-buffer.dir}
+ *       目录下的 JSONL 文件；{@link #replayBufferedData} 周期性重放并归档。</li>
+ * </ul>
+ *
+ * <h3>读取路径</h3>
+ * <p>{@link #readRuntimeHistory} 和 {@link #readAvailabilityBuckets} 直接调 Flux Query；
+ * 异常向上抛出由调用方决定降级（{@code StatusPageServiceImpl.computeSummary} 会兜底）。
+ */
 @Slf4j
 @Component
-public class InfluxDbUtils {
+@ConditionalOnProperty(prefix = "monitor.tsdb", name = "provider", havingValue = "influxdb", matchIfMissing = true)
+public class InfluxDbProvider implements TimeSeriesAdapter {
+
+    /** 24 小时可用率窗口长度（小时）。 */
+    public static final int AVAILABILITY_WINDOW_HOURS = 24;
+
+    /** 单个桶的时长（分钟）。 */
+    public static final int BUCKET_MINUTES = 30;
+
+    /** 24 小时窗口下的桶总数（{@link #AVAILABILITY_WINDOW_HOURS} * 60 / {@link #BUCKET_MINUTES}）。 */
+    public static final int BUCKET_COUNT_24H = AVAILABILITY_WINDOW_HOURS * 60 / BUCKET_MINUTES;
 
     @Value("${spring.influx.url}")
     private String url;
@@ -63,7 +95,7 @@ public class InfluxDbUtils {
     private final ReentrantLock bufferLock = new ReentrantLock();
 
     /**
-     * 初始化 InfluxDB 客户端与同步写入 API。
+     * 初始化 InfluxDB 客户端与同步写入 API，并创建缓冲目录。
      */
     @PostConstruct
     public void init() {
@@ -82,23 +114,24 @@ public class InfluxDbUtils {
         }
     }
 
-    /**
-     * 写入运行时数据，异常时触发断路器回退到本地 JSONL 缓冲。
-     *
-     * @param clientId 客户端ID
-     * @param vo 运行时数据
-     */
+    @Override
     @CircuitBreaker(name = "influxdb", fallbackMethod = "writeToFileBuffer")
-    public void writeRuntimeData(int clientId, RuntimeDetailVO vo) {
+    public void writeRuntime(int clientId, RuntimeDetailVO vo) {
+        this.doWriteRuntimeData(clientId, vo);
+    }
+
+    @Override
+    @CircuitBreaker(name = "influxdb", fallbackMethod = "writeToFileBuffer")
+    public void writeOtlpMetric(int clientId, RuntimeDetailVO vo) {
         this.doWriteRuntimeData(clientId, vo);
     }
 
     /**
-     * 断路器回退逻辑：将运行时数据写入本地 JSONL 文件缓冲。
+     * 断路器回退逻辑：把运行时数据写入本地 JSONL 缓冲。
      *
-     * @param clientId 客户端ID
-     * @param vo 运行时数据
-     * @param throwable 触发回退的异常
+     * @param clientId   客户端 ID
+     * @param vo         运行时数据
+     * @param throwable  触发回退的异常
      */
     private void writeToFileBuffer(int clientId, RuntimeDetailVO vo, Throwable throwable) {
         log.warn("InfluxDB 写入降级到本地缓冲，clientId={}, reason={}", clientId,
@@ -140,12 +173,7 @@ public class InfluxDbUtils {
         }
     }
 
-    /**
-     * 查询客户端历史运行时数据。
-     *
-     * @param clientId 客户端ID
-     * @return 历史运行时数据
-     */
+    @Override
     public RuntimeHistoryVO readRuntimeHistory(int clientId) {
         RuntimeHistoryVO vo = new RuntimeHistoryVO();
         String query = """
@@ -171,26 +199,7 @@ public class InfluxDbUtils {
         return vo;
     }
 
-    /**
-     * 查询客户端最近 24 小时按 30 分钟切分的可用率桶序列。
-     *
-     * <p>实现思路（公开状态页方案 A，参考 {@code status-page-design.md} §2 / §5）：
-     * <ul>
-     *   <li>使用一次 Flux {@code aggregateWindow(every: 30m, fn: count, createEmpty: true)}
-     *       让 InfluxDB 直接补齐缺失桶；</li>
-     *   <li>过滤单一 {@code cpuUsage} field 避免多 field 产生多张表；</li>
-     *   <li>每个桶有数据点视为 1.0（在线），无数据点视为 0.0（离线）；</li>
-     *   <li>返回值长度恒为 {@link #BUCKET_COUNT_24H}（48），oldest → newest 顺序，
-     *       供前端绘制柱条；调用方据此计算总可用率（{@code sum / 48}）。</li>
-     * </ul>
-     *
-     * <p>所有 Influx 异常向上抛出由调用方决定降级策略（缓存兜底或返回 {@code null}）；
-     * 本工具类不在此处做断路器，因为 status page 是只读路径，{@link CircuitBreaker} 仅
-     * 守在写入路径以防写入阻塞采集流。
-     *
-     * @param clientId 客户端ID
-     * @return 48 个桶的可用率数组（0.0 或 1.0）；Influx 没有任何数据时返回长度为 0 的空数组
-     */
+    @Override
     public double[] readAvailabilityBuckets(int clientId) {
         String flux = String.format("""
                 from(bucket: "%s")
@@ -204,16 +213,12 @@ public class InfluxDbUtils {
         if (tables.isEmpty()) {
             return new double[0];
         }
-        // 多 series 可能共享同一时间桶；按 _stop 时间合并取最大 count > 0
         List<FluxRecord> records = tables.get(0).getRecords();
         if (records.isEmpty()) {
             return new double[0];
         }
-        // aggregateWindow 返回的桶数量可能 ≥ BUCKET_COUNT_24H（边界向上取整），
-        // 截取最后 48 个，确保 oldest→newest 长度恒为 48。
         int from = Math.max(0, records.size() - BUCKET_COUNT_24H);
         double[] buckets = new double[BUCKET_COUNT_24H];
-        // 当 records 少于 48 时，前面填 0（表示该时间段尚未上线）
         int offset = BUCKET_COUNT_24H - (records.size() - from);
         for (int i = from; i < records.size(); i++) {
             Object value = records.get(i).getValue();
@@ -224,26 +229,10 @@ public class InfluxDbUtils {
     }
 
     /**
-     * 24 小时可用率窗口长度（小时）。
-     */
-    public static final int AVAILABILITY_WINDOW_HOURS = 24;
-
-    /**
-     * 单个桶的时长（分钟）。
-     */
-    public static final int BUCKET_MINUTES = 30;
-
-    /**
-     * 24 小时窗口下的桶总数（{@link #AVAILABILITY_WINDOW_HOURS} * 60 / {@link #BUCKET_MINUTES}）。
-     */
-    public static final int BUCKET_COUNT_24H =
-            AVAILABILITY_WINDOW_HOURS * 60 / BUCKET_MINUTES;
-
-    /**
      * 执行实际的 InfluxDB 写入。
      *
-     * @param clientId 客户端ID
-     * @param vo 运行时数据
+     * @param clientId 客户端 ID
+     * @param vo       运行时数据
      */
     private void doWriteRuntimeData(int clientId, RuntimeDetailVO vo) {
         RuntimeData data = new RuntimeData();
@@ -256,8 +245,8 @@ public class InfluxDbUtils {
     /**
      * 将降级数据追加到本地 JSONL 缓冲文件。
      *
-     * @param clientId 客户端ID
-     * @param vo 运行时数据
+     * @param clientId 客户端 ID
+     * @param vo       运行时数据
      */
     private void appendBufferRecord(int clientId, RuntimeDetailVO vo) {
         bufferLock.lock();
@@ -346,56 +335,32 @@ public class InfluxDbUtils {
         private RuntimeDetailVO runtime;
         private long bufferedAt;
 
-        /**
-         * 获取客户端ID。
-         *
-         * @return 客户端ID
-         */
+        /** @return 客户端 ID */
         public int getClientId() {
             return clientId;
         }
 
-        /**
-         * 设置客户端ID。
-         *
-         * @param clientId 客户端ID
-         */
+        /** @param clientId 客户端 ID */
         public void setClientId(int clientId) {
             this.clientId = clientId;
         }
 
-        /**
-         * 获取运行时数据。
-         *
-         * @return 运行时数据
-         */
+        /** @return 运行时数据 */
         public RuntimeDetailVO getRuntime() {
             return runtime;
         }
 
-        /**
-         * 设置运行时数据。
-         *
-         * @param runtime 运行时数据
-         */
+        /** @param runtime 运行时数据 */
         public void setRuntime(RuntimeDetailVO runtime) {
             this.runtime = runtime;
         }
 
-        /**
-         * 获取写入缓冲时间戳。
-         *
-         * @return 毫秒时间戳
-         */
+        /** @return 写入缓冲时间戳（毫秒） */
         public long getBufferedAt() {
             return bufferedAt;
         }
 
-        /**
-         * 设置写入缓冲时间戳。
-         *
-         * @param bufferedAt 毫秒时间戳
-         */
+        /** @param bufferedAt 毫秒时间戳 */
         public void setBufferedAt(long bufferedAt) {
             this.bufferedAt = bufferedAt;
         }

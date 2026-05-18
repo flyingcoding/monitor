@@ -73,6 +73,8 @@ public class SecurityConfiguration {
                         .requestMatchers("/api/auth/**", "/error").permitAll()
                         .requestMatchers("/monitor/**").permitAll()
                         .requestMatchers("/actuator/**").permitAll()
+                        // v2.0-alpha：OTLP/HTTP 指标端点；鉴权在 OtlpMetricsController 内部用 X-Monitor-Token 完成
+                        .requestMatchers("/v1/metrics").permitAll()
                         .requestMatchers("/swagger-ui/**", "/v3/api-docs/**", "/doc.html/**","/webjars/**","/favicon.ico").permitAll()
                         // v1.2 共享层：OAuth2 入口、回调路径、公开 OIDC Provider 列表、公开状态页 API
                         .requestMatchers("/oauth2/**", "/login/oauth2/code/**").permitAll()

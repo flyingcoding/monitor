@@ -6,8 +6,10 @@ import com.example.entity.vo.request.StatusPageConfigUpdateVO;
 import com.example.entity.vo.response.StatusPageClientVO;
 import com.example.entity.vo.response.StatusPageConfigVO;
 import com.example.entity.vo.response.StatusPageSummaryVO;
+import com.example.entity.vo.request.RuntimeDetailVO;
+import com.example.entity.vo.response.RuntimeHistoryVO;
 import com.example.service.impl.StatusPageServiceImpl;
-import com.example.utils.InfluxDbUtils;
+import com.example.tsdb.TimeSeriesAdapter;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -106,7 +108,22 @@ class StatusPageServiceImplTest {
                 });
         ReflectionTestUtils.setField(impl, "clientService", clientService);
 
-        InfluxDbUtils influxDbUtils = new InfluxDbUtils() {
+        TimeSeriesAdapter influxDbUtils = new TimeSeriesAdapter() {
+            @Override
+            public void writeRuntime(int clientId, RuntimeDetailVO vo) {
+                // status-page tests only exercise read path
+            }
+
+            @Override
+            public void writeOtlpMetric(int clientId, RuntimeDetailVO vo) {
+                // status-page tests only exercise read path
+            }
+
+            @Override
+            public RuntimeHistoryVO readRuntimeHistory(int clientId) {
+                return new RuntimeHistoryVO();
+            }
+
             @Override
             public double[] readAvailabilityBuckets(int clientId) {
                 influxQueryCount.incrementAndGet();

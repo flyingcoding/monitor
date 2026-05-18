@@ -14,8 +14,8 @@ import com.example.mapper.struct.ClientStructMapper;
 import com.example.service.AlertEvaluator;
 import com.example.service.ClientService;
 import com.example.config.SseEventBus;
+import com.example.tsdb.TimeSeriesAdapter;
 import com.example.utils.CryptoUtils;
-import com.example.utils.InfluxDbUtils;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import jakarta.annotation.PostConstruct;
@@ -49,7 +49,7 @@ public class ClientServiceImpl extends ServiceImpl<ClientMapper, Client> impleme
     private final Map<Integer, Long> heartbeatMap = new ConcurrentHashMap<>();
 
     @Resource
-    InfluxDbUtils influx;
+    TimeSeriesAdapter influx;
 
     @Lazy
     @Resource
@@ -155,7 +155,7 @@ public class ClientServiceImpl extends ServiceImpl<ClientMapper, Client> impleme
     public void updateRuntimeDetail(RuntimeDetailVO vo, Client client) {
         currentRuntime.put(client.getId(), vo);
         heartbeatMap.put(client.getId(), System.currentTimeMillis());
-        influx.writeRuntimeData(client.getId(), vo);
+        influx.writeRuntime(client.getId(), vo);
         sseEventBus.publishRuntime(client.getId(), vo);
         sseEventBus.publishClientList();
         alertEvaluator.evaluate(client.getId(), vo);

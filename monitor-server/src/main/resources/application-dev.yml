@@ -106,6 +106,13 @@ monitor:
     dir: ${MONITOR_INFLUX_BUFFER_DIR:data/influx-buffer}
     replay-interval-ms: ${MONITOR_INFLUX_BUFFER_REPLAY_INTERVAL_MS:15000}
     batch-size: ${MONITOR_INFLUX_BUFFER_BATCH_SIZE:200}
+  # v2.0-alpha 时序后端适配层；victoria-metrics 占位实现，alpha 阶段自动回落到 influxdb
+  tsdb:
+    provider: ${MONITOR_TSDB_PROVIDER:influxdb}
+  # v2.0-alpha OTLP/HTTP 接收端点（POST /v1/metrics）
+  otlp:
+    enabled: ${MONITOR_OTLP_ENABLED:true}
+    max-payload-size: ${MONITOR_OTLP_MAX_PAYLOAD_SIZE:4194304}
 resilience4j:
   circuitbreaker:
     instances:

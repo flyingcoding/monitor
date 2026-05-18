@@ -419,10 +419,11 @@
 ### 优先级排序
 
 ```
-P0 (立即)     告警引擎 → 多渠道通知 → 告警历史 → 通知中心          [v1.1]
-P1 (短期)     OIDC/SSO → 公开状态页 → REST API+Token              [v1.2]
-P2 (短期)     服务探测 → 进程监控 → GPU → SMART → systemd → 测试    [v1.3]
-P3 (中期)     OTLP 指标接收 → 时序 DB 适配层（VM 可选）             [v2.0]
+P0 (完成)     告警引擎 → 多渠道通知 → 告警历史 → 通知中心          [v1.1] ✅ 2026-05-17
+P1 (完成)     OIDC/SSO → 公开状态页 → REST API+Token              [v1.2] ✅ 2026-05-17
+P2 (完成)     服务探测 → 进程监控 → GPU → SMART → systemd → 测试    [v1.3] ✅ 2026-05-18
+P3 (alpha 完成) OTLP 指标接收 + 时序 DB 适配层骨架                 [v2.0-alpha] ✅ 2026-05-18
+P3 (beta 待办)  VictoriaMetrics Provider 真实实现 + vmctl 迁移工具 [v2.0-beta]
 P4 (中期)     Web 终端多 Tab + SFTP → 集成测试 → E2E               [v2.0]
 P5 (长期)     部署体验 → 性能优化 → 多租户                          [v3.0+]
 P6 (可选)     SaaS 模式 → 合规与审计                                [v3.0+]
@@ -456,13 +457,13 @@ P6 (可选)     SaaS 模式 → 合规与审计                                [
 ### 里程碑规划（重新校准）
 
 ```
-2026 Q3  v1.1  告警体系纯击（阈值引擎 + 多通道 + 告警历史 + 通知中心）
-2026 Q4  v1.2  差异化护城河（OIDC/SSO + 状态页 + REST API + API Token + 安全加固）
-2027 Q1  v1.3  监控增强（探测 + 进程 + GPU + SMART + systemd + 测试覆盖启动）
-2027 Q2  v2.0-alpha  OTLP 接收端点 + 时序 DB 适配层骨架
-2027 Q3  v2.0-beta   VictoriaMetrics Provider + vmctl 迁移工具
-2027 Q4  v2.0        Web 终端多 Tab + SFTP + 集成测试 + E2E
-2028+    v3.0+       部署体验 / 性能优化 / 多租户 / 可选 SaaS / 合规审计
+2026 Q3  v1.1            告警体系纯击（阈值引擎 + 多通道 + 告警历史 + 通知中心）         ✅ 2026-05-17
+2026 Q4  v1.2            差异化护城河（OIDC/SSO + 状态页 + REST API + API Token + 安全加固） ✅ 2026-05-17
+2027 Q1  v1.3            监控增强（探测 + 进程 + GPU + SMART + systemd + 测试覆盖启动）   ✅ 2026-05-18
+2027 Q2  v2.0-alpha      OTLP 接收端点 + 时序 DB 适配层骨架                              ✅ 2026-05-18
+2027 Q3  v2.0-beta       VictoriaMetrics Provider + vmctl 迁移工具                       待开始
+2027 Q4  v2.0            Web 终端多 Tab + SFTP + 集成测试 + E2E
+2028+    v3.0+           部署体验 / 性能优化 / 多租户 / 可选 SaaS / 合规审计
 ```
 
 ---
@@ -505,6 +506,46 @@ P6 (可选)     SaaS 模式 → 合规与审计                                [
 | `process_watch` | 关键进程监控配置 | id, client_id, process_pattern, alert_on_missing |
 
 > v1.3 实施记录（2026-05-18）：实际落地 **2 表 + 1 列**（D1 决策聚合告警走 AlertMetric 枚举扩展，不单独建详情表）。Flyway 迁移 `V4__v1-3-monitoring.sql`：`probe_task`（含 HTTP Custom Headers / Basic Auth AES-256-GCM 加密 + SSL 提前告警天数 + 连续失败阈值 + channel_ids）+ `probe_history`（含 ssl_days_remaining）+ `client_detail.capabilities_json TEXT`（D7 上报客户端 4 类可选采集开关与可用性）。`process_watch` 没建表——D2 决策由 client `application.properties` 配置 patterns，admin 通过 capabilities JSON 知晓。`AlertMetric` 同步扩 4 项聚合 metric：`gpu_temperature_max` / `smart_critical_count` / `systemd_failed_count` / `watched_process_missing`。MVP 模块：服务探测（HTTP+Headers+BasicAuth+TCP+ICMP）/ 进程（OSHI + 正则）/ NVIDIA GPU（nvidia-smi）/ SMART（SATA + NVMe via smartctl -j）/ systemd（systemctl show）+ 测试覆盖启动（jacoco LINE coverage ≥ 60% on `com.example.service.impl.*`）。Phase 实施模式：Phase 0 共享层 → Phase 1 五 agent 并行 → Phase 2 集成验收。Server 测试增至 310（v1.2 基线 214 → +96 v1.3），Client 测试增至 63（v1.2 基线 0 → +63 v1.3，覆盖 4 个 Collector）。
+
+### v2.0-alpha 实施记录（2026-05-18）
+
+> 文档：`docs/v2.0-alpha-otlp.md` / PRD：`.trellis/tasks/05-18-v2-0-alpha-otlp-db/prd.md`（D1–D7）
+
+**零 schema 变更**——v2.0-alpha 是纯架构层引入，未新增/修改任何 MySQL 表或 InfluxDB measurement。
+
+| 新增包 / 文件 | 范围 |
+|---------------|------|
+| `com.example.tsdb.TimeSeriesAdapter`（接口） | writeRuntime / writeOtlpMetric / readRuntimeHistory / readAvailabilityBuckets |
+| `com.example.tsdb.InfluxDbProvider` | 收编 `InfluxDbUtils` 全部逻辑（断路器 + JSONL 缓冲降级 + 重放 + Flux 查询） |
+| `com.example.tsdb.VictoriaMetricsProvider` | 占位 stub，所有方法抛 `UnsupportedOperationException("v2.0-alpha 未实现")` |
+| `com.example.tsdb.TsdbAdapterFactory` | 按 `monitor.tsdb.provider` 装配；`victoria-metrics` WARN 后回落到 InfluxDb（D7） |
+| `com.example.controller.otlp.OtlpMetricParser` | OTLP `ExportMetricsServiceRequest` → `RuntimeDetailVO`；`monitor.client.*` 白名单 11 个 Gauge metric |
+| `com.example.controller.OtlpMetricsController` | `POST /v1/metrics`，Protobuf + JSON 双解析；`X-Monitor-Token` 鉴权；写入路径调 `clientService.updateRuntimeDetail` 复用 Alert + SSE |
+
+**删除**：`com.example.utils.InfluxDbUtils`（所有逻辑迁入 `InfluxDbProvider`）。
+
+**调用方迁移**：`ClientServiceImpl` / `StatusPageServiceImpl` 改注入 `TimeSeriesAdapter` 接口；`StatusPageServiceImplTest` 用接口匿名类替代旧的子类化 mock。
+
+**依赖增量**：`io.opentelemetry.proto:opentelemetry-proto:1.3.2-alpha` + `com.google.protobuf:protobuf-java-util:3.25.5`（**不引入 OTel SDK**，仅协议描述包 + JSON↔protobuf 互转）。
+
+**7 项决策（D1–D7）**：
+- D1 OTLP 入站落库 → A 映射到 `runtime` measurement（不新建 otlp_metrics）
+- D2 鉴权 → 复用 client token + `host.name` 交叉校验（不匹配 WARN 不阻塞）
+- D3 metric 命名 → 自定义 `monitor.client.*` 命名空间（不接 OTel 语义约定 `system.*`）
+- D4 Adapter 接口 → 全量收编（write + read）
+- D5 OTLP 协议 → HTTP/Protobuf + HTTP/JSON（不上 gRPC）
+- D6 OTLP 写入路径 → 通过 `ClientService.updateRuntimeDetail` 复用 Alert + SSE 链路
+- D7 `provider=victoria-metrics` → WARN 回落 InfluxDb（不 fail-fast）
+
+**测试覆盖**：Server 测试增至 **349**（v1.3 基线 310 → +35 v2.0-alpha + 既有微调）；新增 5 个测试类：
+- `VictoriaMetricsProviderTest` × 4
+- `TsdbAdapterFactoryTest` × 7
+- `InfluxDbProviderBufferTest` × 4
+- `OtlpMetricParserTest` × 8
+- `OtlpMetricsControllerTest` × 12
+
+**已知简化** vs 原 PRD：原计划"抽 `RuntimeBroadcaster` 共享 Alert+SSE"在代码审查后发现 `ClientServiceImpl.updateRuntimeDetail` 已经是统一管线，OTLP 控制器直接调即可，无重构必要——Phase 1 实际收口为零代码改动。
+
 
 ---
 
