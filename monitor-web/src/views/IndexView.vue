@@ -75,7 +75,8 @@ const tabs = [
   { id: 1, name: '管理', route: 'manage' },
   { id: 2, name: '安全', route: 'security' },
   { id: 3, name: '告警', route: 'alert-history' },
-  { id: 4, name: '状态页', route: 'status-page-config', adminOnly: true }
+  { id: 4, name: '状态页', route: 'status-page-config', adminOnly: true },
+  { id: 5, name: '探测', route: 'probes', adminOnly: true }
 ]
 
 /**

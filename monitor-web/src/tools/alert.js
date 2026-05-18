@@ -22,13 +22,18 @@ const ALERT_STATUSES = [
  * - CPU / 内存 / 磁盘：阈值按百分比配置（0~100），后端会把客户端上报的原始值
  *   （cpuUsage 0~1 比例、memoryUsage GB 已用量、diskUsage GB 已用量）归一为百分比。
  * - 网络上下行：阈值按速率 KB/s 配置，与客户端上报值同单位，不做归一。
+ * - v1.3 新增聚合指标：客户端无对应采集能力时上报 null，后端跳过规则评估（不会误告警）。
  */
 const ALERT_METRICS = [
   { value: 'cpu', label: 'CPU 使用率', unit: '%', max: 100 },
   { value: 'memory', label: '内存使用率', unit: '%', max: 100 },
   { value: 'disk', label: '磁盘使用率', unit: '%', max: 100 },
   { value: 'network_up', label: '网络上行速率', unit: 'KB/s', max: 1000000 },
-  { value: 'network_down', label: '网络下行速率', unit: 'KB/s', max: 1000000 }
+  { value: 'network_down', label: '网络下行速率', unit: 'KB/s', max: 1000000 },
+  { value: 'gpu_temperature_max', label: 'GPU 最高温度', unit: '°C', max: 150 },
+  { value: 'smart_critical_count', label: 'SMART 关键异常数', unit: '个', max: 64 },
+  { value: 'systemd_failed_count', label: 'systemd 失败服务数', unit: '个', max: 256 },
+  { value: 'watched_process_missing', label: '关键进程缺失数', unit: '个', max: 256 }
 ]
 
 /** 比较运算符元数据。 */
@@ -109,6 +114,8 @@ function formatMetricValue(metric, value) {
   const meta = metricMeta(metric)
   if (meta.unit === '%') return `${Number(value).toFixed(1)} %`
   if (meta.unit === 'KB/s') return `${Number(value).toFixed(1)} KB/s`
+  if (meta.unit === '°C') return `${Number(value).toFixed(1)} °C`
+  if (meta.unit === '个') return `${Number(value).toFixed(0)} 个`
   return String(value)
 }
 

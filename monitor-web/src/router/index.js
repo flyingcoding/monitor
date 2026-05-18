@@ -78,6 +78,12 @@ const router = createRouter({
           meta: { adminOnly: true }
         },
         {
+          path: 'probes',
+          name: 'probes',
+          component: () => import('@/views/tabs/Probes.vue'),
+          meta: { adminOnly: true }
+        },
+        {
           path: 'alert',
           component: () => import('@/views/tabs/AlertView.vue'),
           redirect: { name: 'alert-history' },

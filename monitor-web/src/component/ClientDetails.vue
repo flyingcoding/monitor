@@ -11,6 +11,10 @@ import {
 } from '@/tools'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import RuntimeHistory from '@/component/RuntimeHistory.vue'
+import Gpus from '@/component/Gpus.vue'
+import Processes from '@/component/Processes.vue'
+import SmartHealth from '@/component/SmartHealth.vue'
+import SystemdServices from '@/component/SystemdServices.vue'
 import { Connection, Delete } from '@element-plus/icons-vue'
 
 const locations = [
@@ -132,6 +136,53 @@ onBeforeUnmount(() => {
 })
 
 const now = computed(() => details.runtime.list[details.runtime.list.length - 1])
+
+/**
+ * 解析 capabilities_json 字符串为对象，失败时返回 null。
+ *
+ * @returns {object|null} capabilities 对象
+ */
+const capabilities = computed(() => {
+  const raw = details.base && details.base.capabilitiesJson
+  if (!raw) return null
+  try {
+    return typeof raw === 'string' ? JSON.parse(raw) : raw
+  } catch (_e) {
+    return null
+  }
+})
+
+/**
+ * 仅当客户端启用且 systemctl 可用时显示 systemd tab。
+ */
+const showSystemdTab = computed(() => {
+  const cap = capabilities.value
+  return !!(cap && cap.systemd && cap.systemd.available)
+})
+
+/**
+ * 仅当客户端启用且 smartctl 可用时显示 SMART tab。
+ */
+const showSmartTab = computed(() => {
+  const cap = capabilities.value
+  return !!(cap && cap.smart && cap.smart.available)
+})
+
+/**
+ * 仅当客户端启用进程采集（patterns 非空）时显示进程 tab。
+ */
+const showProcessTab = computed(() => {
+  const cap = capabilities.value
+  return !!(cap && cap.process && cap.process.enabled)
+})
+
+/**
+ * 仅当客户端启用且 nvidia-smi 可用时显示 GPU tab。
+ */
+const showGpuTab = computed(() => {
+  const cap = capabilities.value
+  return !!(cap && cap.gpu && cap.gpu.available)
+})
 
 const init = (value) => {
   if (value !== -1) {
@@ -352,6 +403,38 @@ watch(() => props.id, init, { immediate: true })
           </template>
         </div>
         <el-empty description="服务器处于离线状态，请检查服务器是否正常运行" v-else />
+        <template v-if="showSystemdTab">
+          <div class="title" style="margin-top: 20px">
+            <i class="fa-solid fa-gears"></i>
+            systemd 服务
+          </div>
+          <el-divider style="margin: 10px 0" />
+          <systemd-services :client-id="props.id" />
+        </template>
+        <template v-if="showSmartTab">
+          <div class="title" style="margin-top: 20px">
+            <i class="fa-solid fa-hard-drive"></i>
+            SMART 磁盘健康
+          </div>
+          <el-divider style="margin: 10px 0" />
+          <smart-health :client-id="props.id" :capabilities="capabilities" />
+        </template>
+        <template v-if="showProcessTab">
+          <div class="title" style="margin-top: 20px">
+            <i class="fa-solid fa-list-check"></i>
+            进程监控
+          </div>
+          <el-divider style="margin: 10px 0" />
+          <processes :client-id="props.id" />
+        </template>
+        <template v-if="showGpuTab">
+          <div class="title" style="margin-top: 20px">
+            <i class="fa-solid fa-microchip"></i>
+            GPU
+          </div>
+          <el-divider style="margin: 10px 0" />
+          <gpus :client-id="props.id" :capabilities="capabilities" />
+        </template>
       </div>
     </div>
   </el-scrollbar>
