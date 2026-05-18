@@ -504,6 +504,8 @@ P6 (可选)     SaaS 模式 → 合规与审计                                [
 | `probe_history` | 探测结果历史 | id, task_id, executed_at, success, latency_ms, status_code, message |
 | `process_watch` | 关键进程监控配置 | id, client_id, process_pattern, alert_on_missing |
 
+> v1.3 实施记录（2026-05-18）：实际落地 **2 表 + 1 列**（D1 决策聚合告警走 AlertMetric 枚举扩展，不单独建详情表）。Flyway 迁移 `V4__v1-3-monitoring.sql`：`probe_task`（含 HTTP Custom Headers / Basic Auth AES-256-GCM 加密 + SSL 提前告警天数 + 连续失败阈值 + channel_ids）+ `probe_history`（含 ssl_days_remaining）+ `client_detail.capabilities_json TEXT`（D7 上报客户端 4 类可选采集开关与可用性）。`process_watch` 没建表——D2 决策由 client `application.properties` 配置 patterns，admin 通过 capabilities JSON 知晓。`AlertMetric` 同步扩 4 项聚合 metric：`gpu_temperature_max` / `smart_critical_count` / `systemd_failed_count` / `watched_process_missing`。MVP 模块：服务探测（HTTP+Headers+BasicAuth+TCP+ICMP）/ 进程（OSHI + 正则）/ NVIDIA GPU（nvidia-smi）/ SMART（SATA + NVMe via smartctl -j）/ systemd（systemctl show）+ 测试覆盖启动（jacoco LINE coverage ≥ 60% on `com.example.service.impl.*`）。Phase 实施模式：Phase 0 共享层 → Phase 1 五 agent 并行 → Phase 2 集成验收。Server 测试增至 310（v1.2 基线 214 → +96 v1.3），Client 测试增至 63（v1.2 基线 0 → +63 v1.3，覆盖 4 个 Collector）。
+
 ---
 
 ## 附录 B：调研索引
