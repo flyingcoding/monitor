@@ -12,9 +12,7 @@ import org.springframework.context.annotation.Primary;
  * <p>根据配置 {@code monitor.tsdb.provider} 选择当前生效的 {@link TimeSeriesAdapter}：
  *
  * <ul>
- *   <li>{@code influxdb}（默认 / 未配置）—— 直接使用 {@link InfluxDbProvider}；本类不创建 Bean，
- *       由 {@code InfluxDbProvider} 的 {@code @Component + @ConditionalOnProperty(matchIfMissing=true)}
- *       自动注入。</li>
+ *   <li>{@code influxdb}（默认 / 未配置）—— 直接使用 {@link InfluxDbProvider}。</li>
  *   <li>{@code victoria-metrics} —— v2.0-alpha 未实装，工厂打印 WARN 后注入 {@link InfluxDbProvider}
  *       作为回落实现（决策 D7：fallback 优先于 fail-fast）。</li>
  * </ul>
@@ -39,13 +37,13 @@ public class TsdbAdapterFactory {
     private String provider;
 
     /**
-     * 当 {@code provider=victoria-metrics} 时注入一个标记为 {@link Primary} 的回落 Adapter。
+     * 注入一个标记为 {@link Primary} 的当前生效 Adapter。
      *
-     * <p>仅在该分支下创建 Bean；默认分支下不创建任何 Bean，由 {@link InfluxDbProvider} 的
-     * {@code @ConditionalOnProperty(matchIfMissing=true)} 自动装配生效。
+     * <p>v2.0-alpha 的所有 provider 值都返回 {@link InfluxDbProvider}；当配置为
+     * {@code victoria-metrics} 时额外打印 WARN，显式说明当前是回落路径。
      *
      * @param influxDbProvider 真实的 {@link InfluxDbProvider} Bean（由 Spring 注入）
-     * @return 当 provider=victoria-metrics 时返回回落实现；否则返回 null（不创建 Bean）
+     * @return 当前生效的时序适配器
      */
     @Bean
     @Primary

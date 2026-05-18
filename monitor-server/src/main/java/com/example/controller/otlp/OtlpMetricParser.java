@@ -12,9 +12,11 @@ import lombok.extern.slf4j.Slf4j;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.function.BiConsumer;
 
 /**
@@ -47,6 +49,17 @@ public final class OtlpMetricParser {
 
     /** 白名单 metric 命名空间前缀（约定）。 */
     public static final String NAMESPACE = "monitor.client.";
+
+    /** 能安全写入 {@link RuntimeDetailVO} 的基础运行时 metric 集合。 */
+    public static final Set<String> BASE_RUNTIME_METRICS = Set.of(
+            NAMESPACE + "cpu_usage",
+            NAMESPACE + "memory_used_gb",
+            NAMESPACE + "disk_used_gb",
+            NAMESPACE + "network_upload_kbps",
+            NAMESPACE + "network_download_kbps",
+            NAMESPACE + "disk_read_mbps",
+            NAMESPACE + "disk_write_mbps"
+    );
 
     /** OTel 标准 resource attribute key：主机名。 */
     public static final String RESOURCE_HOST_NAME = "host.name";
@@ -119,6 +132,7 @@ public final class OtlpMetricParser {
                 }
                 NumberDataPoint dp = last.get();
                 setter.accept(result.runtime, numericValue(dp));
+                result.mappedMetricNames.add(name);
                 long ts = dp.getTimeUnixNano() / 1_000_000L;
                 if (ts > result.runtime.getTimestamp()) {
                     result.runtime.setTimestamp(ts);
@@ -187,5 +201,28 @@ public final class OtlpMetricParser {
 
         /** 该 ResourceMetrics 中未识别 metric 的计数；key=metric 名称，value=出现次数。 */
         private final Map<String, Long> unknownMetricCounts = new HashMap<>();
+
+        /** 已成功映射到 {@link RuntimeDetailVO} 的 metric 名称集合。 */
+        private final Set<String> mappedMetricNames = new HashSet<>();
+
+        /**
+         * 判断基础 7 项运行时 metric 是否齐全。
+         *
+         * @return true 表示可以安全写入 runtime measurement；false 表示写入会把缺失字段误置为 0
+         */
+        public boolean hasCompleteBaseMetrics() {
+            return mappedMetricNames.containsAll(BASE_RUNTIME_METRICS);
+        }
+
+        /**
+         * 返回缺失的基础 metric 名称，便于日志定位 Collector 转换配置问题。
+         *
+         * @return 缺失的基础 metric 名称集合
+         */
+        public Set<String> missingBaseMetricNames() {
+            Set<String> missing = new HashSet<>(BASE_RUNTIME_METRICS);
+            missing.removeAll(mappedMetricNames);
+            return missing;
+        }
     }
 }

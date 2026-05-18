@@ -519,7 +519,7 @@ P6 (可选)     SaaS 模式 → 合规与审计                                [
 | `com.example.tsdb.InfluxDbProvider` | 收编 `InfluxDbUtils` 全部逻辑（断路器 + JSONL 缓冲降级 + 重放 + Flux 查询） |
 | `com.example.tsdb.VictoriaMetricsProvider` | 占位 stub，所有方法抛 `UnsupportedOperationException("v2.0-alpha 未实现")` |
 | `com.example.tsdb.TsdbAdapterFactory` | 按 `monitor.tsdb.provider` 装配；`victoria-metrics` WARN 后回落到 InfluxDb（D7） |
-| `com.example.controller.otlp.OtlpMetricParser` | OTLP `ExportMetricsServiceRequest` → `RuntimeDetailVO`；`monitor.client.*` 白名单 11 个 Gauge metric |
+| `com.example.controller.otlp.OtlpMetricParser` | OTLP `ExportMetricsServiceRequest` → `RuntimeDetailVO`；`monitor.client.*` 白名单 11 个 Gauge metric；基础 7 项完整才允许写入 runtime |
 | `com.example.controller.OtlpMetricsController` | `POST /v1/metrics`，Protobuf + JSON 双解析；`X-Monitor-Token` 鉴权；写入路径调 `clientService.updateRuntimeDetail` 复用 Alert + SSE |
 
 **删除**：`com.example.utils.InfluxDbUtils`（所有逻辑迁入 `InfluxDbProvider`）。
@@ -537,12 +537,12 @@ P6 (可选)     SaaS 模式 → 合规与审计                                [
 - D6 OTLP 写入路径 → 通过 `ClientService.updateRuntimeDetail` 复用 Alert + SSE 链路
 - D7 `provider=victoria-metrics` → WARN 回落 InfluxDb（不 fail-fast）
 
-**测试覆盖**：Server 测试增至 **349**（v1.3 基线 310 → +35 v2.0-alpha + 既有微调）；新增 5 个测试类：
+**测试覆盖**：Server 测试增至 **352**（v1.3 基线 310 → +38 v2.0-alpha + 既有微调）；新增 5 个测试类：
 - `VictoriaMetricsProviderTest` × 4
-- `TsdbAdapterFactoryTest` × 7
+- `TsdbAdapterFactoryTest` × 8
 - `InfluxDbProviderBufferTest` × 4
 - `OtlpMetricParserTest` × 8
-- `OtlpMetricsControllerTest` × 12
+- `OtlpMetricsControllerTest` × 14
 
 **已知简化** vs 原 PRD：原计划"抽 `RuntimeBroadcaster` 共享 Alert+SSE"在代码审查后发现 `ClientServiceImpl.updateRuntimeDetail` 已经是统一管线，OTLP 控制器直接调即可，无重构必要——Phase 1 实际收口为零代码改动。
 

@@ -37,7 +37,7 @@ import java.util.List;
  *   <li>protobuf 解析失败 → 400；</li>
  *   <li>JSON 解析失败 → 400；</li>
  *   <li>payload 超限 → 413；</li>
- *   <li>未识别 metric 不报错（counter 仅记日志）；</li>
+ *   <li>未识别 metric 不报错（counter 仅记日志），但基础 metric 不完整时不写入；</li>
  *   <li>host.name 不匹配仍写入 token 对应 client。</li>
  * </ul>
  *
@@ -147,13 +147,13 @@ class OtlpMetricsControllerTest {
 
     @Test
     void unknownMetricsShouldNotBlockWrite() {
+        long ts = nowNs();
         ExportMetricsServiceRequest req = ExportMetricsServiceRequest.newBuilder()
                 .addResourceMetrics(ResourceMetrics.newBuilder()
                         .setResource(Resource.newBuilder()
                                 .addAttributes(stringAttr("host.name", "host-01")))
-                        .addScopeMetrics(ScopeMetrics.newBuilder()
-                                .addMetrics(gauge(OtlpMetricParser.NAMESPACE + "cpu_usage", 0.3, nowNs()))
-                                .addMetrics(gauge("system.unknown", 99.0, nowNs()))))
+                        .addScopeMetrics(baseRuntimeMetrics(0.3, ts)
+                                .addMetrics(gauge("system.unknown", 99.0, ts))))
                 .build();
         ResponseEntity<RestBean<Void>> resp = controller.ingestProtobuf("token-good", req.toByteArray());
         Assertions.assertEquals(200, resp.getStatusCode().value());
@@ -167,14 +167,43 @@ class OtlpMetricsControllerTest {
                 .addResourceMetrics(ResourceMetrics.newBuilder()
                         .setResource(Resource.newBuilder()
                                 .addAttributes(stringAttr("host.name", "other-host")))
-                        .addScopeMetrics(ScopeMetrics.newBuilder()
-                                .addMetrics(gauge(OtlpMetricParser.NAMESPACE + "cpu_usage", 0.7, nowNs()))))
+                        .addScopeMetrics(baseRuntimeMetrics(0.7, nowNs())))
                 .build();
         ResponseEntity<RestBean<Void>> resp = controller.ingestProtobuf("token-good", req.toByteArray());
         Assertions.assertEquals(200, resp.getStatusCode().value());
         Assertions.assertEquals(1, capturedVOs.size());
         Assertions.assertSame(knownClient, capturedClients.get(0),
                 "host.name 不匹配仅 WARN，决策 D2：仍写入 token 对应 client");
+    }
+
+    @Test
+    void partialBaseMetricsShouldReturn200WithoutCallingService() {
+        ExportMetricsServiceRequest req = ExportMetricsServiceRequest.newBuilder()
+                .addResourceMetrics(ResourceMetrics.newBuilder()
+                        .setResource(Resource.newBuilder()
+                                .addAttributes(stringAttr("host.name", "host-01")))
+                        .addScopeMetrics(ScopeMetrics.newBuilder()
+                                .addMetrics(gauge(OtlpMetricParser.NAMESPACE + "cpu_usage", 0.8, nowNs()))))
+                .build();
+        ResponseEntity<RestBean<Void>> resp = controller.ingestProtobuf("token-good", req.toByteArray());
+        Assertions.assertEquals(200, resp.getStatusCode().value());
+        Assertions.assertTrue(capturedVOs.isEmpty(),
+                "基础 7 项不完整时不能写入 runtime，避免缺失字段被 primitive 默认值 0 污染");
+    }
+
+    @Test
+    void allUnknownMetricsShouldReturn200WithoutCallingService() {
+        ExportMetricsServiceRequest req = ExportMetricsServiceRequest.newBuilder()
+                .addResourceMetrics(ResourceMetrics.newBuilder()
+                        .setResource(Resource.newBuilder()
+                                .addAttributes(stringAttr("host.name", "host-01")))
+                        .addScopeMetrics(ScopeMetrics.newBuilder()
+                                .addMetrics(gauge("system.cpu.utilization", 0.8, nowNs()))))
+                .build();
+        ResponseEntity<RestBean<Void>> resp = controller.ingestProtobuf("token-good", req.toByteArray());
+        Assertions.assertEquals(200, resp.getStatusCode().value());
+        Assertions.assertTrue(capturedVOs.isEmpty(),
+                "全未知 metric 只记录 WARN，不应刷新 cache/heartbeat/Influx");
     }
 
     @Test
@@ -191,13 +220,24 @@ class OtlpMetricsControllerTest {
     }
 
     private static ExportMetricsServiceRequest buildRequest(String hostName, double cpuValue) {
+        long ts = nowNs();
         return ExportMetricsServiceRequest.newBuilder()
                 .addResourceMetrics(ResourceMetrics.newBuilder()
                         .setResource(Resource.newBuilder()
                                 .addAttributes(stringAttr("host.name", hostName)))
-                        .addScopeMetrics(ScopeMetrics.newBuilder()
-                                .addMetrics(gauge(OtlpMetricParser.NAMESPACE + "cpu_usage", cpuValue, nowNs()))))
+                        .addScopeMetrics(baseRuntimeMetrics(cpuValue, ts)))
                 .build();
+    }
+
+    private static ScopeMetrics.Builder baseRuntimeMetrics(double cpuValue, long timeUnixNano) {
+        return ScopeMetrics.newBuilder()
+                .addMetrics(gauge(OtlpMetricParser.NAMESPACE + "cpu_usage", cpuValue, timeUnixNano))
+                .addMetrics(gauge(OtlpMetricParser.NAMESPACE + "memory_used_gb", 8.0, timeUnixNano))
+                .addMetrics(gauge(OtlpMetricParser.NAMESPACE + "disk_used_gb", 120.0, timeUnixNano))
+                .addMetrics(gauge(OtlpMetricParser.NAMESPACE + "network_upload_kbps", 12.5, timeUnixNano))
+                .addMetrics(gauge(OtlpMetricParser.NAMESPACE + "network_download_kbps", 25.0, timeUnixNano))
+                .addMetrics(gauge(OtlpMetricParser.NAMESPACE + "disk_read_mbps", 1.5, timeUnixNano))
+                .addMetrics(gauge(OtlpMetricParser.NAMESPACE + "disk_write_mbps", 2.5, timeUnixNano));
     }
 
     private static long nowNs() {

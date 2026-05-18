@@ -72,6 +72,8 @@ class OtlpMetricParserTest {
         Assertions.assertEquals(2, vo.getWatchedProcessMissing());
         Assertions.assertEquals(fixedMs, vo.getTimestamp());
         Assertions.assertTrue(r.getUnknownMetricCounts().isEmpty());
+        Assertions.assertTrue(r.hasCompleteBaseMetrics());
+        Assertions.assertTrue(r.missingBaseMetricNames().isEmpty());
     }
 
     @Test
@@ -92,6 +94,8 @@ class OtlpMetricParserTest {
         Assertions.assertEquals(2, r.getUnknownMetricCounts().size());
         Assertions.assertEquals(1L, r.getUnknownMetricCounts().get("system.cpu.utilization"));
         Assertions.assertEquals(2L, r.getUnknownMetricCounts().get("foo.bar.baz"));
+        Assertions.assertFalse(r.hasCompleteBaseMetrics());
+        Assertions.assertTrue(r.missingBaseMetricNames().contains("monitor.client.memory_used_gb"));
     }
 
     @Test

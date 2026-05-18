@@ -4,6 +4,7 @@ import com.example.entity.vo.request.RuntimeDetailVO;
 import com.example.entity.vo.response.RuntimeHistoryVO;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.test.util.ReflectionTestUtils;
 
 /**
@@ -51,6 +52,12 @@ class TsdbAdapterFactoryTest {
     }
 
     @Test
+    void influxProviderShouldStayAvailableForFallbackProviderValues() {
+        Assertions.assertNull(InfluxDbProvider.class.getAnnotation(ConditionalOnProperty.class),
+                "InfluxDbProvider 必须始终注册，victoria-metrics / unknown provider 才能回落到它");
+    }
+
+    @Test
     void fallbackResultMustImplementTimeSeriesAdapterInterface() {
         TimeSeriesAdapter adapter = resolveWith("victoria-metrics");
         Assertions.assertTrue(adapter instanceof TimeSeriesAdapter);
@@ -78,4 +85,5 @@ class TsdbAdapterFactoryTest {
         // 引用 RuntimeHistoryVO 以避免未使用 import 警告
         Assertions.assertNotNull(RuntimeHistoryVO.class);
     }
+
 }

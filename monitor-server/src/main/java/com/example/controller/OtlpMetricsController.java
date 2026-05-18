@@ -44,7 +44,7 @@ import java.util.Objects;
  *   <li>无 token / token 无效 → 401，{@code RestBean.unauthorized}</li>
  *   <li>payload 超过 {@code monitor.otlp.max-payload-size} → 413</li>
  *   <li>protobuf/JSON 解析失败 → 400</li>
- *   <li>未识别 metric → 不报错，counter 自增 + WARN（D3）</li>
+ *   <li>未识别 metric → 不报错，counter 自增 + WARN；基础 7 项不完整时跳过写入（D3）</li>
  *   <li>{@code host.name} 与 token 绑定 client 名称不一致 → WARN，仍写入 token 对应 client（D2）</li>
  * </ul>
  */
@@ -138,6 +138,11 @@ public class OtlpMetricsController {
         for (OtlpMetricParser.Result result : results) {
             this.crossCheckHostName(result.getHostName(), client);
             this.logUnknownMetrics(result.getUnknownMetricCounts(), client.getId());
+            if (!result.hasCompleteBaseMetrics()) {
+                log.warn("OTLP 基础 metric 不完整，跳过 runtime 写入 clientId={} host.name={} missing={}",
+                        client.getId(), result.getHostName(), result.missingBaseMetricNames());
+                continue;
+            }
             RuntimeDetailVO vo = result.getRuntime();
             clientService.updateRuntimeDetail(vo, client);
         }

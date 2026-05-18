@@ -17,7 +17,6 @@ import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -38,9 +37,8 @@ import java.util.concurrent.locks.ReentrantLock;
  * 默认 {@link TimeSeriesAdapter} 实现，封装 InfluxDB 2.x 客户端。
  *
  * <p>v2.0-alpha 之前的 {@code InfluxDbUtils} 的全部能力（写入、断路器降级、JSONL 缓冲与定时重放、
- * 历史与可用率查询）均迁入此类。当 {@code monitor.tsdb.provider=influxdb}（默认）时由
- * {@link TsdbAdapterFactory} 注入；当配置为其他值（如 {@code victoria-metrics}）时，工厂仍以
- * 本类作为回落实现。
+ * 历史与可用率查询）均迁入此类。本类始终作为 Spring Bean 注册，由 {@link TsdbAdapterFactory}
+ * 选择为默认实现或未实装 provider 的回落实现。
  *
  * <h3>写入路径</h3>
  * <ul>
@@ -57,7 +55,6 @@ import java.util.concurrent.locks.ReentrantLock;
  */
 @Slf4j
 @Component
-@ConditionalOnProperty(prefix = "monitor.tsdb", name = "provider", havingValue = "influxdb", matchIfMissing = true)
 public class InfluxDbProvider implements TimeSeriesAdapter {
 
     /** 24 小时可用率窗口长度（小时）。 */
