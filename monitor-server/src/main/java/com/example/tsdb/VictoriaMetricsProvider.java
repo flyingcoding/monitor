@@ -26,9 +26,7 @@ import org.springframework.web.client.RestClientException;
 
 import java.time.Duration;
 import java.time.Instant;
-import java.util.ArrayList;
 import java.util.Date;
-import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
 
@@ -260,25 +258,45 @@ public class VictoriaMetricsProvider implements TimeSeriesAdapter {
         if (values == null || values.isEmpty()) {
             return new double[0];
         }
-        List<Double> sampled = new ArrayList<>(InfluxDbProvider.BUCKET_COUNT_24H);
+        double[] buckets = new double[InfluxDbProvider.BUCKET_COUNT_24H];
+        long lastBucketEndEpochSecond = end.getEpochSecond();
         for (int i = 0; i < values.size(); i++) {
             JSONArray point = values.getJSONArray(i);
             if (point == null || point.size() < 2) {
-                sampled.add(0.0);
+                continue;
+            }
+            int bucketIndex = availabilityBucketIndex(point.getDouble(0), lastBucketEndEpochSecond);
+            if (bucketIndex < 0) {
                 continue;
             }
             String raw = point.getString(1);
             double v = "NaN".equalsIgnoreCase(raw) ? 0.0 : Double.parseDouble(raw);
-            sampled.add(v > 0 ? 1.0 : 0.0);
-        }
-        // 与 InfluxDbProvider 的对齐策略一致：按 BUCKET_COUNT_24H 截断或右对齐
-        double[] buckets = new double[InfluxDbProvider.BUCKET_COUNT_24H];
-        int srcStart = Math.max(0, sampled.size() - InfluxDbProvider.BUCKET_COUNT_24H);
-        int dstOffset = InfluxDbProvider.BUCKET_COUNT_24H - (sampled.size() - srcStart);
-        for (int i = srcStart; i < sampled.size(); i++) {
-            buckets[dstOffset + (i - srcStart)] = sampled.get(i);
+            buckets[bucketIndex] = v > 0 ? 1.0 : 0.0;
         }
         return buckets;
+    }
+
+    /**
+     * 将 VM query_range 返回的样本时间戳映射到 24h 内的 48 个 30 分钟桶。
+     *
+     * <p>query_range 可能返回稀疏点；不能只按返回顺序右对齐，否则旧样本会被误认为最近在线。
+     * 桶语义与原 InfluxDB 路径保持一致：忽略 24h 窗口最左边界上的额外点，仅保留从
+     * {@code end - 23.5h} 到 {@code end} 的 48 个桶。
+     *
+     * @param epochSeconds             VM 返回的浮点秒时间戳
+     * @param lastBucketEndEpochSecond 最后一个桶的结束时间（查询 end）
+     * @return 0..47 的桶索引；窗口外返回 -1
+     */
+    private static int availabilityBucketIndex(Double epochSeconds, long lastBucketEndEpochSecond) {
+        if (epochSeconds == null) {
+            return -1;
+        }
+        long pointEpochSecond = Math.round(epochSeconds);
+        long offsetSteps = Math.round((double) (lastBucketEndEpochSecond - pointEpochSecond) / AVAILABILITY_STEP_SECONDS);
+        if (offsetSteps < 0 || offsetSteps >= InfluxDbProvider.BUCKET_COUNT_24H) {
+            return -1;
+        }
+        return InfluxDbProvider.BUCKET_COUNT_24H - 1 - (int) offsetSteps;
     }
 
     /**

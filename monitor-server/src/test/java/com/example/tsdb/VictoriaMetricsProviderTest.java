@@ -16,6 +16,7 @@ import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Instant;
 import java.util.List;
 import java.util.stream.Stream;
 
@@ -216,11 +217,13 @@ class VictoriaMetricsProviderTest {
     void readAvailabilityBucketsShouldThrowUntilPr3Lands() {
         // PR3 已落地：返回 0 / 1 桶数组
         StringBuilder values = new StringBuilder("[");
+        long firstBucketEnd = Instant.now().getEpochSecond()
+                - (InfluxDbProvider.BUCKET_COUNT_24H - 1L) * VictoriaMetricsProvider.AVAILABILITY_STEP_SECONDS;
         for (int i = 0; i < InfluxDbProvider.BUCKET_COUNT_24H; i++) {
             if (i > 0) values.append(",");
             // 模拟一半在线、一半离线（present_over_time=1.0 / 0.0）
             values.append("[")
-                    .append(1700000000 + i * 1800)
+                    .append(firstBucketEnd + (long) i * VictoriaMetricsProvider.AVAILABILITY_STEP_SECONDS)
                     .append(",\"")
                     .append(i % 2 == 0 ? "1" : "0")
                     .append("\"]");
@@ -252,20 +255,30 @@ class VictoriaMetricsProviderTest {
     }
 
     @Test
-    void readAvailabilityBucketsShouldTolerateNaNValueFromVm() {
-        // present_over_time 在空窗口返回 NaN，需当作 0 处理（离线）
+    void readAvailabilityBucketsShouldAlignSparseValuesAndTolerateNaNFromVm() {
+        // present_over_time 在空窗口返回 NaN，需按实际时间戳落桶并当作 0 处理（离线）
+        long lastBucketEnd = Instant.now().getEpochSecond();
+        int nanOffset = 6;
+        int onlineOffset = 2;
+        long nanTimestamp = lastBucketEnd
+                - (long) nanOffset * VictoriaMetricsProvider.AVAILABILITY_STEP_SECONDS;
+        long onlineTimestamp = lastBucketEnd
+                - (long) onlineOffset * VictoriaMetricsProvider.AVAILABILITY_STEP_SECONDS;
         String json = "{\"status\":\"success\",\"data\":{\"resultType\":\"matrix\",\"result\":[{"
                 + "\"metric\":{\"__name__\":\"runtime_cpuUsage\",\"clientId\":\"42\"},"
-                + "\"values\":[[1700000000.0,\"NaN\"],[1700001800.0,\"1\"]]}]}}";
+                + "\"values\":[[" + nanTimestamp + ",\"NaN\"],[" + onlineTimestamp + ",\"1\"]]}]}}";
         wireMock.stubFor(post(urlPathEqualTo("/api/v1/query_range"))
                 .willReturn(aResponse().withStatus(200)
                         .withHeader("Content-Type", "application/json")
                         .withBody(json)));
         double[] buckets = provider.readAvailabilityBuckets(42);
         Assertions.assertEquals(InfluxDbProvider.BUCKET_COUNT_24H, buckets.length);
-        // 数据右对齐：最后两位是 0.0（NaN）和 1.0
-        Assertions.assertEquals(0.0, buckets[buckets.length - 2], 1e-9, "NaN 应转为 0 离线");
-        Assertions.assertEquals(1.0, buckets[buckets.length - 1], 1e-9);
+        Assertions.assertEquals(0.0, buckets[buckets.length - 1 - nanOffset], 1e-9,
+                "NaN 应按自身时间戳落桶并转为 0 离线");
+        Assertions.assertEquals(1.0, buckets[buckets.length - 1 - onlineOffset], 1e-9,
+                "稀疏在线点不能被错误右对齐到最新桶");
+        Assertions.assertEquals(0.0, buckets[buckets.length - 1], 1e-9,
+                "没有最近窗口样本时最新桶应保持离线");
     }
 
     @Test
