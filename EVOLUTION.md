@@ -423,7 +423,7 @@ P0 (完成)     告警引擎 → 多渠道通知 → 告警历史 → 通知中�
 P1 (完成)     OIDC/SSO → 公开状态页 → REST API+Token              [v1.2] ✅ 2026-05-17
 P2 (完成)     服务探测 → 进程监控 → GPU → SMART → systemd → 测试    [v1.3] ✅ 2026-05-18
 P3 (alpha 完成) OTLP 指标接收 + 时序 DB 适配层骨架                 [v2.0-alpha] ✅ 2026-05-18
-P3 (beta 待办)  VictoriaMetrics Provider 真实实现 + vmctl 迁移工具 [v2.0-beta]
+P3 (beta 完成)  VictoriaMetrics Provider 真实实现 + vmctl 迁移工具 [v2.0-beta] ✅ 2026-05-19
 P4 (中期)     Web 终端多 Tab + SFTP → 集成测试 → E2E               [v2.0]
 P5 (长期)     部署体验 → 性能优化 → 多租户                          [v3.0+]
 P6 (可选)     SaaS 模式 → 合规与审计                                [v3.0+]
@@ -461,7 +461,7 @@ P6 (可选)     SaaS 模式 → 合规与审计                                [
 2026 Q4  v1.2            差异化护城河（OIDC/SSO + 状态页 + REST API + API Token + 安全加固） ✅ 2026-05-17
 2027 Q1  v1.3            监控增强（探测 + 进程 + GPU + SMART + systemd + 测试覆盖启动）   ✅ 2026-05-18
 2027 Q2  v2.0-alpha      OTLP 接收端点 + 时序 DB 适配层骨架                              ✅ 2026-05-18
-2027 Q3  v2.0-beta       VictoriaMetrics Provider + vmctl 迁移工具                       待开始
+2027 Q3  v2.0-beta       VictoriaMetrics Provider + vmctl 迁移工具                       ✅ 2026-05-19
 2027 Q4  v2.0            Web 终端多 Tab + SFTP + 集成测试 + E2E
 2028+    v3.0+           部署体验 / 性能优化 / 多租户 / 可选 SaaS / 合规审计
 ```
@@ -545,6 +545,52 @@ P6 (可选)     SaaS 模式 → 合规与审计                                [
 - `OtlpMetricsControllerTest` × 14
 
 **已知简化** vs 原 PRD：原计划"抽 `RuntimeBroadcaster` 共享 Alert+SSE"在代码审查后发现 `ClientServiceImpl.updateRuntimeDetail` 已经是统一管线，OTLP 控制器直接调即可，无重构必要——Phase 1 实际收口为零代码改动。
+
+
+### v2.0-beta 实施记录（2026-05-19）
+
+> 文档：`docs/v2.0-beta-vm.md` / PRD：`.trellis/tasks/05-19-v2-0-beta-victoriametrics-provider-vmctl/prd.md`（D1–D7）
+
+**仍零 schema 变更**——v2.0-beta 在适配层之上完成 VM 实装，未新增 / 修改任何 MySQL 表或 measurement。
+
+| 改动文件 / 新增 | 范围 |
+|---------------|------|
+| `com.example.tsdb.VictoriaMetricsProvider` | 占位 stub → 完整实现（write 复用 `influxdb-client-java` 写 VM `/api/v2/write`；read 用 Spring `RestClient` 调 PromQL `/api/v1/query_range`） |
+| `com.example.tsdb.TsdbAdapterFactory` | `victoria-metrics` 分支真实注入 VM Bean（不再 WARN 回落）；新增 deprecation WARN 检测旧 yml key |
+| `com.example.tsdb.InfluxDbProvider` | 断路器 `name="influxdb"` → `name="tsdb"`（与原 PRD 对齐）；yml 注入嵌套占位符兼容兜底 `${monitor.tsdb.influxdb.url:${spring.influx.url:}}`；启动时自动迁移 `data/influx-buffer/` → `data/tsdb-buffer/`；内部类 `InfluxBufferRecord` → `TsdbBufferRecord` |
+| `application-{dev,prod}.yml` | namespace 重构为 `monitor.tsdb.{influxdb,victoria-metrics,buffer}.*`；resilience4j instance 改名 `influxdb` → `tsdb`；旧 key 保留作 deprecated alias |
+| `docker-compose.yml` | 新增 `victoria-metrics` service（profile=vm） + `vmctl-migrate` service（profile=migration），均默认不启动 |
+| `Makefile` | 新增 `up-vm` / `migrate-influx-to-vm` / `logs-vm` / `down-vm` 4 个 target |
+| `.env.example` | 新增 `MONITOR_TSDB_PROVIDER` / `VM_URL` / `VM_DATA_DIR` / `VM_RETENTION` / `VM_PORT` / `INFLUX_V1_USERNAME` / `INFLUX_V1_PASSWORD` / `INFLUX_V1_URL` 占位 |
+| `docs/v2.0-beta-vm.md` | 完整部署 / 切换 / vmctl 迁移（含 InfluxDB v2 → v1 兼容 workaround）/ 故障排查 / 升级与回滚指南 |
+| `monitor-server/pom.xml` | 新增 `org.wiremock:wiremock-standalone:3.10.0` test scope |
+
+**调用方无需改动**：`ClientServiceImpl` / `StatusPageServiceImpl` 注入的是 `TimeSeriesAdapter` 接口，provider 切换对它们透明。
+
+**7 项决策（D1–D7）**：
+- D1 MVP 范围 → Approach B（完整生产可用，~6-7 天工作量）
+- D2 断路器名 `influxdb` → `tsdb`；yml namespace 分离 + deprecated alias 1 minor 兼容
+- D3 metric 命名天然统一（line protocol 写入让 vmctl / VM / OTLP 都生成 `runtime_<field>`，无 union 复杂度）
+- D4 JSONL 缓冲单目录共享 `data/tsdb-buffer/`（业务 VO provider-agnostic）
+- D5 OTLP 不加 source label（保持 v2.0-alpha 现状）
+- D6 docker-compose VM / vmctl 都 profile-only（不破坏 `make up` 默认拓扑）
+- D7 WireMock 主力单测 + Testcontainers VM v1.143.0 可选集成（PR5）
+
+**测试覆盖**：Server 测试增至 **375**（v2.0-alpha 基线 352 → +23 v2.0-beta）；新增 / 改写：
+- `VictoriaMetricsProviderTest` 4 → 13（+9：write happy / fallback / unified naming / 构造器约束 / read happy / NaN / 多 series 合并 / non-success 容忍 / 命名空间过滤）
+- `TsdbAdapterFactoryTest` 8 → 11（+3：VM provider 注入路径 + Bean 无条件注册 + deprecation WARN）
+- `InfluxDbProviderBufferTest` 4 → 6（+2：旧目录 JSONL 迁移 + 同名冲突跳过）
+
+JaCoCo verify 通过（`com.example.service.impl` LINE ≥ 60% 未回归）。
+
+**vmctl 迁移关键 caveat**：vmctl 不直接支持 InfluxDB v2（[#5914](https://github.com/VictoriaMetrics/VictoriaMetrics/issues/5914)），文档化了 v1 兼容 workaround（`influx v1 auth create` + `influx v1 dbrp create`）。
+
+**未做（明确 out-of-scope）**：
+- VM 集群版（vminsert/vmselect/vmstorage）
+- 双写过渡桥（Approach C，留到 v2.0 正式版若用户提需求再做）
+- OTLP gRPC / Logs / Traces
+- 前端 provider 切换 UI
+- OTLP source label
 
 
 ---

@@ -103,6 +103,8 @@ services:
       INFLUX_PASSWORD: ${INFLUX_PASSWORD}
       INFLUX_BUCKET: ${INFLUX_BUCKET}
       INFLUX_ORG: ${INFLUX_ORG}
+      MONITOR_TSDB_PROVIDER: ${MONITOR_TSDB_PROVIDER:-influxdb}
+      VM_URL: ${VM_URL:-http://victoria-metrics:8428}
       JWT_KEY: ${JWT_KEY}
       SSH_ENCRYPT_KEY: ${SSH_ENCRYPT_KEY}
       MAIL_USERNAME: ${MAIL_USERNAME}
@@ -139,6 +141,45 @@ services:
       - monitor-server
     ports:
       - "80:80"
+
+  # v2.0-beta：VictoriaMetrics 单节点（可选，opt-in via `--profile vm`）。
+  # 启动：`make up-vm` 或 `docker compose --profile vm up -d victoria-metrics`
+  victoria-metrics:
+    profiles: ["vm"]
+    image: victoriametrics/victoria-metrics:v1.143.0
+    container_name: monitor-victoria-metrics
+    restart: always
+    command:
+      - "-storageDataPath=/storage"
+      - "-retentionPeriod=${VM_RETENTION:-90d}"
+      - "-httpListenAddr=:8428"
+    ports:
+      - "${VM_PORT:-8428}:8428"
+    volumes:
+      - ${VM_DATA_DIR:-./data/victoria-metrics}:/storage
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8428/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # v2.0-beta：InfluxDB 2.7 → VictoriaMetrics 一次性迁移任务（opt-in via `--profile migration`）。
+  # 启动：`make migrate-influx-to-vm`（等价 `docker compose --profile migration run --rm vmctl-migrate`）。
+  # 由于 vmctl 不直接支持 InfluxDB v2 token，需要先在 InfluxDB 上 `influx v1 auth create` 建 v1 凭证，
+  # 并把这些凭证填入 INFLUX_V1_USERNAME / INFLUX_V1_PASSWORD（详见 docs/v2.0-beta-vm.md）。
+  vmctl-migrate:
+    profiles: ["migration"]
+    image: victoriametrics/vmctl:v1.143.0
+    container_name: monitor-vmctl-migrate
+    command:
+      - "influx"
+      - "--influx-addr=${INFLUX_V1_URL:-http://influxdb:8086}"
+      - "--influx-database=${INFLUX_BUCKET:-program}"
+      - "--influx-user=${INFLUX_V1_USERNAME:-}"
+      - "--influx-password=${INFLUX_V1_PASSWORD:-}"
+      - "--vm-addr=${VM_URL:-http://victoria-metrics:8428}"
+      - "--influx-measurement-field-separator=_"
+      - "-s"
 
 volumes:
   mysql-data:
