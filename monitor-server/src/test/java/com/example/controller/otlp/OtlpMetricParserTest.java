@@ -117,6 +117,50 @@ class OtlpMetricParserTest {
     }
 
     @Test
+    void shouldSkipGaugeDataPointWithoutNumericValue() {
+        long ts = nowNs();
+        ExportMetricsServiceRequest req = ExportMetricsServiceRequest.newBuilder()
+                .addResourceMetrics(ResourceMetrics.newBuilder()
+                        .addScopeMetrics(ScopeMetrics.newBuilder()
+                                .addMetrics(gaugeWithoutValue("monitor.client.cpu_usage", ts + 1))
+                                .addMetrics(gauge("monitor.client.memory_used_gb", 8.0, ts))
+                                .addMetrics(gauge("monitor.client.disk_used_gb", 120.0, ts))
+                                .addMetrics(gauge("monitor.client.network_upload_kbps", 12.5, ts))
+                                .addMetrics(gauge("monitor.client.network_download_kbps", 25.0, ts))
+                                .addMetrics(gauge("monitor.client.disk_read_mbps", 1.5, ts))
+                                .addMetrics(gauge("monitor.client.disk_write_mbps", 2.5, ts))))
+                .build();
+
+        List<OtlpMetricParser.Result> results = OtlpMetricParser.parse(req);
+        Assertions.assertEquals(1, results.size());
+        OtlpMetricParser.Result result = results.get(0);
+        Assertions.assertFalse(result.hasCompleteBaseMetrics(),
+                "未携带 asDouble/asInt 的 datapoint 不能把基础 metric 标记为完整");
+        Assertions.assertTrue(result.missingBaseMetricNames().contains("monitor.client.cpu_usage"));
+    }
+
+    @Test
+    void shouldUseLatestNumericPointWhenNewestPointHasNoValue() {
+        long ts = nowNs();
+        ExportMetricsServiceRequest req = ExportMetricsServiceRequest.newBuilder()
+                .addResourceMetrics(ResourceMetrics.newBuilder()
+                        .addScopeMetrics(ScopeMetrics.newBuilder()
+                                .addMetrics(Metric.newBuilder()
+                                        .setName("monitor.client.cpu_usage")
+                                        .setGauge(Gauge.newBuilder()
+                                                .addDataPoints(NumberDataPoint.newBuilder()
+                                                        .setTimeUnixNano(ts)
+                                                        .setAsDouble(0.33))
+                                                .addDataPoints(NumberDataPoint.newBuilder()
+                                                        .setTimeUnixNano(ts + 1))))))
+                .build();
+
+        List<OtlpMetricParser.Result> results = OtlpMetricParser.parse(req);
+        Assertions.assertEquals(1, results.size());
+        Assertions.assertEquals(0.33, results.get(0).getRuntime().getCpuUsage(), 1e-9);
+    }
+
+    @Test
     void shouldHandleMultipleResourceMetricsBlocks() {
         ExportMetricsServiceRequest req = ExportMetricsServiceRequest.newBuilder()
                 .addResourceMetrics(ResourceMetrics.newBuilder()
@@ -203,6 +247,15 @@ class OtlpMetricParserTest {
                         .addDataPoints(NumberDataPoint.newBuilder()
                                 .setTimeUnixNano(timeUnixNano)
                                 .setAsInt(value)))
+                .build();
+    }
+
+    private static Metric gaugeWithoutValue(String name, long timeUnixNano) {
+        return Metric.newBuilder()
+                .setName(name)
+                .setGauge(Gauge.newBuilder()
+                        .addDataPoints(NumberDataPoint.newBuilder()
+                                .setTimeUnixNano(timeUnixNano)))
                 .build();
     }
 }

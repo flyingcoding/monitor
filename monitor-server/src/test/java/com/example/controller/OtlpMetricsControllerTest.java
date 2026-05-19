@@ -125,9 +125,24 @@ class OtlpMetricsControllerTest {
     }
 
     @Test
+    void invalidProtobufWithInvalidTokenShouldReturn401BeforeParsing() {
+        ResponseEntity<RestBean<Void>> resp =
+                controller.ingestProtobuf("token-bad", new byte[]{(byte) 0xff, (byte) 0xff, (byte) 0xff});
+        Assertions.assertEquals(401, resp.getStatusCode().value());
+        Assertions.assertTrue(capturedVOs.isEmpty());
+    }
+
+    @Test
     void invalidJsonShouldReturn400() {
         ResponseEntity<RestBean<Void>> resp = controller.ingestJson("token-good", "{not valid json");
         Assertions.assertEquals(400, resp.getStatusCode().value());
+    }
+
+    @Test
+    void invalidJsonWithMissingTokenShouldReturn401BeforeParsing() {
+        ResponseEntity<RestBean<Void>> resp = controller.ingestJson(null, "{not valid json");
+        Assertions.assertEquals(401, resp.getStatusCode().value());
+        Assertions.assertTrue(capturedVOs.isEmpty());
     }
 
     @Test

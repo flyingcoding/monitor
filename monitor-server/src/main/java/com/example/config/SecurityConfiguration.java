@@ -2,11 +2,13 @@ package com.example.config;
 
 import com.example.config.security.oidc.OidcFailureHandler;
 import com.example.config.security.oidc.OidcSuccessHandler;
+import com.example.controller.otlp.OtlpConstants;
 import com.example.entity.RestBean;
 import com.example.entity.dto.Account;
 import com.example.entity.vo.response.AuthorizeVO;
 import com.example.filter.ApiTokenFilter;
 import com.example.filter.JwtFilter;
+import com.example.filter.OtlpPayloadSizeFilter;
 import com.example.filter.RequestLogFilter;
 import com.example.mapper.struct.AccountStructMapper;
 import com.example.service.AccountService;
@@ -46,6 +48,9 @@ public class SecurityConfiguration {
     ApiTokenFilter apiTokenFilter;
 
     @Resource
+    OtlpPayloadSizeFilter otlpPayloadSizeFilter;
+
+    @Resource
     OidcSuccessHandler oidcSuccessHandler;
 
     @Resource
@@ -74,7 +79,7 @@ public class SecurityConfiguration {
                         .requestMatchers("/monitor/**").permitAll()
                         .requestMatchers("/actuator/**").permitAll()
                         // v2.0-alpha：OTLP/HTTP 指标端点；鉴权在 OtlpMetricsController 内部用 X-Monitor-Token 完成
-                        .requestMatchers("/v1/metrics").permitAll()
+                        .requestMatchers(OtlpConstants.METRICS_PATH).permitAll()
                         .requestMatchers("/swagger-ui/**", "/v3/api-docs/**", "/doc.html/**","/webjars/**","/favicon.ico").permitAll()
                         // v1.2 共享层：OAuth2 入口、回调路径、公开 OIDC Provider 列表、公开状态页 API
                         .requestMatchers("/oauth2/**", "/login/oauth2/code/**").permitAll()
@@ -115,6 +120,8 @@ public class SecurityConfiguration {
                 .sessionManagement(conf -> conf
                         .sessionCreationPolicy(SessionCreationPolicy.IF_REQUIRED))
                 .addFilterBefore(requestLogFilter, UsernamePasswordAuthenticationFilter.class)
+                // v2.0-alpha：在 @RequestBody 读入内存前对 OTLP payload 做有界读取与 413 拒绝
+                .addFilterAfter(otlpPayloadSizeFilter, RequestLogFilter.class)
                 .addFilterBefore(jwtFilter, RequestLogFilter.class)
                 // v1.2 共享层：API Token 校验过滤器排在 JwtFilter 之后；命中 SecurityContext 即跳过，
                 // 真实 HMAC-SHA256 校验由 Agent B 在 ApiTokenFilter 内落地。

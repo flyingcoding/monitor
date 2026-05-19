@@ -1,5 +1,6 @@
 package com.example.controller;
 
+import com.example.controller.otlp.OtlpConstants;
 import com.example.controller.otlp.OtlpMetricParser;
 import com.example.entity.RestBean;
 import com.example.entity.dto.Client;
@@ -50,11 +51,11 @@ import java.util.Objects;
  */
 @Slf4j
 @RestController
-@RequestMapping("/v1/metrics")
+@RequestMapping(OtlpConstants.METRICS_PATH)
 public class OtlpMetricsController {
 
     /** 鉴权 header 名（与 docs/v2.0-alpha-otlp.md 文档对齐）。 */
-    public static final String AUTH_HEADER = "X-Monitor-Token";
+    public static final String AUTH_HEADER = OtlpConstants.AUTH_HEADER;
 
     @Resource
     private ClientService clientService;
@@ -79,6 +80,10 @@ public class OtlpMetricsController {
         if (!enabled) {
             return ResponseEntity.status(503).body(RestBean.failure(503, "OTLP 端点未启用"));
         }
+        Client client = authenticateClient(token);
+        if (client == null) {
+            return unauthorized(token);
+        }
         if (payload != null && payload.length > maxPayloadBytes) {
             return tooLarge();
         }
@@ -89,7 +94,7 @@ public class OtlpMetricsController {
             log.warn("OTLP protobuf 解析失败: {}", e.getMessage());
             return ResponseEntity.badRequest().body(RestBean.failure(400, "OTLP protobuf 解析失败"));
         }
-        return process(token, request);
+        return process(client, request);
     }
 
     /**
@@ -106,6 +111,10 @@ public class OtlpMetricsController {
         if (!enabled) {
             return ResponseEntity.status(503).body(RestBean.failure(503, "OTLP 端点未启用"));
         }
+        Client client = authenticateClient(token);
+        if (client == null) {
+            return unauthorized(token);
+        }
         if (body != null && body.getBytes(StandardCharsets.UTF_8).length > maxPayloadBytes) {
             return tooLarge();
         }
@@ -116,20 +125,39 @@ public class OtlpMetricsController {
             log.warn("OTLP JSON 解析失败: {}", e.getMessage());
             return ResponseEntity.badRequest().body(RestBean.failure(400, "OTLP JSON 解析失败"));
         }
-        return process(token, builder.build());
+        return process(client, builder.build());
     }
 
     /**
-     * 共享的鉴权 + 解析 + 写入流程。
+     * 通过 {@code X-Monitor-Token} 鉴权并解析 token 绑定的客户端。
+     *
+     * @param token 客户端 token
+     * @return token 对应客户端；缺失或无效时返回 null
      */
-    private ResponseEntity<RestBean<Void>> process(String token, ExportMetricsServiceRequest request) {
+    private Client authenticateClient(String token) {
+        if (token == null || token.isBlank()) {
+            return null;
+        }
+        return clientService.findClientByToken(token);
+    }
+
+    /**
+     * 构造 token 鉴权失败响应。
+     *
+     * @param token 请求携带的 token
+     * @return 401 响应
+     */
+    private ResponseEntity<RestBean<Void>> unauthorized(String token) {
         if (token == null || token.isBlank()) {
             return ResponseEntity.status(401).body(RestBean.unauthorized("缺少 X-Monitor-Token"));
         }
-        Client client = clientService.findClientByToken(token);
-        if (client == null) {
-            return ResponseEntity.status(401).body(RestBean.unauthorized("X-Monitor-Token 无效"));
-        }
+        return ResponseEntity.status(401).body(RestBean.unauthorized("X-Monitor-Token 无效"));
+    }
+
+    /**
+     * 共享的解析结果写入流程。
+     */
+    private ResponseEntity<RestBean<Void>> process(Client client, ExportMetricsServiceRequest request) {
         List<OtlpMetricParser.Result> results = OtlpMetricParser.parse(request);
         if (results.isEmpty()) {
             log.warn("OTLP 请求未携带任何 monitor.client.* metric clientId={}", client.getId());

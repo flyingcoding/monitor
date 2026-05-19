@@ -127,11 +127,16 @@ public final class OtlpMetricParser {
                 }
                 Optional<NumberDataPoint> last = latestGaugePoint(metric);
                 if (last.isEmpty()) {
-                    log.warn("OTLP metric {} 非 Gauge 或无数据点，跳过", name);
+                    log.warn("OTLP metric {} 非 Gauge、无数据点或数据点未携带数值，跳过", name);
                     continue;
                 }
                 NumberDataPoint dp = last.get();
-                setter.accept(result.runtime, numericValue(dp));
+                Optional<Double> value = numericValue(dp);
+                if (value.isEmpty()) {
+                    log.warn("OTLP metric {} 数据点未携带数值，跳过", name);
+                    continue;
+                }
+                setter.accept(result.runtime, value.get());
                 result.mappedMetricNames.add(name);
                 long ts = dp.getTimeUnixNano() / 1_000_000L;
                 if (ts > result.runtime.getTimestamp()) {
@@ -174,17 +179,26 @@ public final class OtlpMetricParser {
             return Optional.empty();
         }
         return metric.getGauge().getDataPointsList().stream()
+                .filter(OtlpMetricParser::hasNumericValue)
                 .reduce((a, b) -> a.getTimeUnixNano() >= b.getTimeUnixNano() ? a : b);
     }
 
     /**
-     * 把 NumberDataPoint 的 int / double 值统一转 double。
+     * 判断数据点是否携带 OTLP 数值字段。
      */
-    private static double numericValue(NumberDataPoint dp) {
+    private static boolean hasNumericValue(NumberDataPoint dp) {
+        return dp.getValueCase() == NumberDataPoint.ValueCase.AS_DOUBLE
+                || dp.getValueCase() == NumberDataPoint.ValueCase.AS_INT;
+    }
+
+    /**
+     * 把 NumberDataPoint 的 int / double 值统一转 double；缺失数值时返回空。
+     */
+    private static Optional<Double> numericValue(NumberDataPoint dp) {
         return switch (dp.getValueCase()) {
-            case AS_DOUBLE -> dp.getAsDouble();
-            case AS_INT -> (double) dp.getAsInt();
-            default -> 0.0;
+            case AS_DOUBLE -> Optional.of(dp.getAsDouble());
+            case AS_INT -> Optional.of((double) dp.getAsInt());
+            default -> Optional.empty();
         };
     }
 
