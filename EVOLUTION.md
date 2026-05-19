@@ -555,7 +555,7 @@ P6 (可选)     SaaS 模式 → 合规与审计                                [
 
 | 改动文件 / 新增 | 范围 |
 |---------------|------|
-| `com.example.tsdb.VictoriaMetricsProvider` | 占位 stub → 完整实现（write 复用 `influxdb-client-java` 写 VM `/api/v2/write`；read 用 Spring `RestClient` 调 PromQL `/api/v1/query_range`） |
+| `com.example.tsdb.VictoriaMetricsProvider` | 占位 stub → 完整实现（write 复用 `influxdb-client-java` 写 VM `/api/v2/write`；历史读取用 `/api/v1/export` 保留原始样本，可用率读取用 PromQL `/api/v1/query_range`） |
 | `com.example.tsdb.TsdbAdapterFactory` | `victoria-metrics` 分支真实注入 VM Bean（不再 WARN 回落）；新增 deprecation WARN 检测旧 yml key |
 | `com.example.tsdb.InfluxDbProvider` | 断路器 `name="influxdb"` → `name="tsdb"`（与原 PRD 对齐）；yml 注入嵌套占位符兼容兜底 `${monitor.tsdb.influxdb.url:${spring.influx.url:}}`；启动时自动迁移 `data/influx-buffer/` → `data/tsdb-buffer/`；内部类 `InfluxBufferRecord` → `TsdbBufferRecord` |
 | `application-{dev,prod}.yml` | namespace 重构为 `monitor.tsdb.{influxdb,victoria-metrics,buffer}.*`；resilience4j instance 改名 `influxdb` → `tsdb`；旧 key 保留作 deprecated alias |

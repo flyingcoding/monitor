@@ -43,11 +43,12 @@ import java.util.TreeMap;
  *       不把 VM 失败样本误写入 InfluxDB。</li>
  *   <li><b>JSONL 缓冲复用</b>：直接注入 {@link InfluxDbProvider} 作为 fallback 写入目标。
  *       这避免重写一份 buffer 路径，并保证切换 provider 时旧缓冲可被重放。</li>
- *   <li><b>查询路径</b>：用 Spring {@link RestClient} 调 VM 的 PromQL 端点 {@code /api/v1/query_range}：
+ *   <li><b>查询路径</b>：用 Spring {@link RestClient} 调 VM HTTP API：
  *       <ul>
- *         <li>{@link #readRuntimeHistory}：查 1h 内所有 {@code runtime_*} metric，按时间戳合并为 VO 列表；</li>
+ *         <li>{@link #readRuntimeHistory}：通过 {@code /api/v1/export} 读取 1h 内
+ *             {@code runtime_*} 原始样本，按时间戳合并为 VO 列表；</li>
  *         <li>{@link #readAvailabilityBuckets}：用 MetricsQL 扩展函数 {@code present_over_time}
- *             返回 48 个 0/1 桶，对应 24h × 30min。</li>
+ *             通过 {@code /api/v1/query_range} 返回 48 个 0/1 桶，对应 24h × 30min。</li>
  *       </ul>
  *   </li>
  * </ul>
@@ -77,8 +78,8 @@ public class VictoriaMetricsProvider implements TimeSeriesAdapter {
     /** PromQL query_range 端点。 */
     public static final String QUERY_RANGE_PATH = "/api/v1/query_range";
 
-    /** 1h 历史曲线的采样间隔。 */
-    public static final int RUNTIME_HISTORY_STEP_SECONDS = 10;
+    /** VM JSON line raw sample export 端点。 */
+    public static final String EXPORT_PATH = "/api/v1/export";
 
     /** 24h 可用率桶的步长（30 分钟），与 {@link InfluxDbProvider#BUCKET_MINUTES} 对齐。 */
     public static final int AVAILABILITY_STEP_SECONDS = InfluxDbProvider.BUCKET_MINUTES * 60;
@@ -126,8 +127,8 @@ public class VictoriaMetricsProvider implements TimeSeriesAdapter {
                 .requestFactory(factory)
                 .build();
 
-        log.info("VictoriaMetricsProvider 已初始化，写入端点={}/api/v2/write，查询端点={}{}（超时 {}ms）",
-                url, url, QUERY_RANGE_PATH, queryTimeoutMs);
+        log.info("VictoriaMetricsProvider 已初始化，写入端点={}/api/v2/write，原始样本端点={}{}，查询端点={}{}（超时 {}ms）",
+                url, url, EXPORT_PATH, url, QUERY_RANGE_PATH, queryTimeoutMs);
     }
 
     /**
@@ -191,39 +192,43 @@ public class VictoriaMetricsProvider implements TimeSeriesAdapter {
         RuntimeHistoryVO vo = new RuntimeHistoryVO();
         Instant end = Instant.now();
         Instant start = end.minusSeconds(3600);
-        String query = String.format("{__name__=~\"%s.*\", clientId=\"%d\"}", METRIC_NAME_PREFIX, clientId);
-        JSONObject response;
+        String selector = String.format("{__name__=~\"%s.*\",clientId=\"%d\"}", METRIC_NAME_PREFIX, clientId);
+        String response;
         try {
-            response = this.queryRange(query, start, end, RUNTIME_HISTORY_STEP_SECONDS);
+            response = this.exportRawSamples(selector, start, end);
         } catch (RestClientException e) {
-            log.warn("VictoriaMetrics readRuntimeHistory 查询失败 clientId={}: {}", clientId, e.getMessage());
+            log.warn("VictoriaMetrics readRuntimeHistory 原始样本导出失败 clientId={}: {}", clientId, e.getMessage());
             throw e;
         }
-        JSONArray result = this.extractMatrixResult(response);
-        if (result == null || result.isEmpty()) {
+        if (response == null || response.isBlank()) {
             return vo;
         }
-
         // 按时间戳聚合：TreeMap 保证按时间戳升序输出，与 InfluxDB 表现一致
         Map<Long, JSONObject> byTimestamp = new TreeMap<>();
-        for (int i = 0; i < result.size(); i++) {
-            JSONObject series = result.getJSONObject(i);
-            String metricName = series.getJSONObject("metric").getString("__name__");
+        for (String line : response.split("\\R")) {
+            if (line == null || line.isBlank()) {
+                continue;
+            }
+            JSONObject series = JSON.parseObject(line);
+            JSONObject metric = series.getJSONObject("metric");
+            if (metric == null) {
+                continue;
+            }
+            String metricName = metric.getString("__name__");
             if (metricName == null || !metricName.startsWith(METRIC_NAME_PREFIX)) {
                 continue;
             }
             String fieldName = metricName.substring(METRIC_NAME_PREFIX.length());
+            JSONArray timestamps = series.getJSONArray("timestamps");
             JSONArray values = series.getJSONArray("values");
-            if (values == null) {
+            if (timestamps == null || values == null) {
                 continue;
             }
-            for (int j = 0; j < values.size(); j++) {
-                JSONArray point = values.getJSONArray(j);
-                if (point == null || point.size() < 2) {
-                    continue;
-                }
-                long tsMillis = secondsToMillis(point.getDouble(0));
-                Object rawValue = parsePromValue(point.getString(1));
+            int points = Math.min(timestamps.size(), values.size());
+            for (int j = 0; j < points; j++) {
+                Long tsMillis = timestamps.getLong(j);
+                if (tsMillis == null) continue;
+                Object rawValue = parsePromValue(values.getString(j));
                 JSONObject row = byTimestamp.computeIfAbsent(tsMillis, ts -> {
                     JSONObject obj = new JSONObject();
                     obj.put("timestamp", Instant.ofEpochMilli(ts));
@@ -300,6 +305,31 @@ public class VictoriaMetricsProvider implements TimeSeriesAdapter {
     }
 
     /**
+     * 调 VM {@code /api/v1/export} 读取原始样本 JSONL。
+     *
+     * <p>不能用 {@code /api/v1/query_range} 获取历史曲线原始点：range query 会按 step 多次求值，
+     * 可能通过 lookback 合成不存在的采样点。export API 返回存储中的 {@code values/timestamps}。
+     *
+     * @param selector time series selector
+     * @param start    起始时间
+     * @param end      结束时间
+     * @return JSON line 字符串；无数据时可能为空
+     */
+    private String exportRawSamples(String selector, Instant start, Instant end) {
+        MultiValueMap<String, String> form = new LinkedMultiValueMap<>();
+        form.add("match[]", selector);
+        form.add("start", String.valueOf(start.getEpochSecond()));
+        form.add("end", String.valueOf(end.getEpochSecond()));
+        form.add("reduce_mem_usage", "1");
+        return queryClient.post()
+                .uri(EXPORT_PATH)
+                .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                .body(form)
+                .retrieve()
+                .body(String.class);
+    }
+
+    /**
      * 调 VM PromQL {@code /api/v1/query_range} 并解析响应。返回原始 JSON，调用方按 resultType 处理。
      *
      * @param query   PromQL 表达式
@@ -369,13 +399,4 @@ public class VictoriaMetricsProvider implements TimeSeriesAdapter {
         }
     }
 
-    /**
-     * Prometheus 时间戳为浮点秒（含小数毫秒）；转 epoch millis。
-     *
-     * @param epochSeconds 浮点秒时间戳
-     * @return 毫秒时间戳
-     */
-    private static long secondsToMillis(double epochSeconds) {
-        return Math.round(epochSeconds * 1000.0);
-    }
 }

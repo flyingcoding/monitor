@@ -35,7 +35,7 @@ import static com.github.tomakehurst.wiremock.client.WireMock.urlPathEqualTo;
  *   <li>写入成功路径：line protocol 中包含 {@code runtime} measurement 与各 field；</li>
  *   <li>写入失败路径：fallback 路径只落共享 JSONL 缓冲，不误写 InfluxDB；</li>
  *   <li>构造器约束：{@link InfluxDbProvider} 必须注入；</li>
- *   <li>read 方法通过 MetricsQL 查询并映射为前端兼容 VO；</li>
+ *   <li>read 方法通过 VM export / MetricsQL 查询并映射为前端兼容 VO；</li>
  *   <li>{@code @CircuitBreaker} 与 {@code @PreDestroy} 注解保持原状。</li>
  * </ul>
  *
@@ -123,40 +123,25 @@ class VictoriaMetricsProviderTest {
     }
 
     @Test
-    void readRuntimeHistoryShouldThrowUntilPr3Lands() {
-        // PR3 已落地：现在返回成功（mock VM 返回空 matrix），VO 应有空列表
-        wireMock.stubFor(post(urlPathEqualTo("/api/v1/query_range"))
+    void readRuntimeHistoryShouldReturnEmptyListWhenExportIsEmpty() {
+        wireMock.stubFor(post(urlPathEqualTo("/api/v1/export"))
                 .willReturn(aResponse()
                         .withStatus(200)
                         .withHeader("Content-Type", "application/json")
-                        .withBody("{\"status\":\"success\",\"data\":{\"resultType\":\"matrix\",\"result\":[]}}")));
+                        .withBody("")));
         com.example.entity.vo.response.RuntimeHistoryVO vo = provider.readRuntimeHistory(1);
         Assertions.assertNotNull(vo);
-        Assertions.assertTrue(vo.getList().isEmpty(), "空 result 应返回空 list");
+        Assertions.assertTrue(vo.getList().isEmpty(), "空 export 应返回空 list");
     }
 
     @Test
     void readRuntimeHistoryShouldMergeMultipleSeriesByTimestamp() {
-        // 模拟 VM 返回 cpu + memory 两个 series，每个 2 个时间点
+        // VM /api/v1/export 返回 JSONL 原始样本：每行一个 series，timestamps 为 epoch millis。
         String json = """
-                {
-                  "status": "success",
-                  "data": {
-                    "resultType": "matrix",
-                    "result": [
-                      {
-                        "metric": {"__name__": "runtime_cpuUsage", "clientId": "42"},
-                        "values": [[1700000000.0, "0.42"], [1700000010.0, "0.55"]]
-                      },
-                      {
-                        "metric": {"__name__": "runtime_memoryUsage", "clientId": "42"},
-                        "values": [[1700000000.0, "8.0"], [1700000010.0, "8.5"]]
-                      }
-                    ]
-                  }
-                }
+                {"metric":{"__name__":"runtime_cpuUsage","clientId":"42"},"values":[0.42,0.55],"timestamps":[1700000000000,1700000010000]}
+                {"metric":{"__name__":"runtime_memoryUsage","clientId":"42"},"values":[8.0,8.5],"timestamps":[1700000000000,1700000010000]}
                 """;
-        wireMock.stubFor(post(urlPathEqualTo("/api/v1/query_range"))
+        wireMock.stubFor(post(urlPathEqualTo("/api/v1/export"))
                 .willReturn(aResponse().withStatus(200)
                         .withHeader("Content-Type", "application/json")
                         .withBody(json)));
@@ -167,42 +152,37 @@ class VictoriaMetricsProviderTest {
         Assertions.assertNotNull(first.get("timestamp"), "每行必须含 timestamp");
         Assertions.assertEquals(0.42, ((Number) first.get("cpuUsage")).doubleValue(), 1e-9);
         Assertions.assertEquals(8.0, ((Number) first.get("memoryUsage")).doubleValue(), 1e-9);
+        wireMock.verify(postRequestedFor(urlPathEqualTo("/api/v1/export"))
+                .withRequestBody(containing("match%5B%5D="))
+                .withRequestBody(containing("reduce_mem_usage=1")));
+        wireMock.verify(0, postRequestedFor(urlPathEqualTo("/api/v1/query_range")));
     }
 
     @Test
-    void readRuntimeHistoryShouldTolerateNonSuccessResponse() {
-        // VM 返回 error 状态：应不抛错，返回空 VO，方便上层兜底
-        wireMock.stubFor(post(urlPathEqualTo("/api/v1/query_range"))
+    void readRuntimeHistoryShouldMergeSplitExportLinesForSameSeries() {
+        // reduce_mem_usage=1 时同一个 series 可能分多行返回，必须继续按 timestamp 聚合。
+        String json = """
+                {"metric":{"__name__":"runtime_cpuUsage","clientId":"42"},"values":[0.42],"timestamps":[1700000000000]}
+                {"metric":{"__name__":"runtime_cpuUsage","clientId":"42"},"values":[0.55],"timestamps":[1700000010000]}
+                """;
+        wireMock.stubFor(post(urlPathEqualTo("/api/v1/export"))
                 .willReturn(aResponse().withStatus(200)
                         .withHeader("Content-Type", "application/json")
-                        .withBody("{\"status\":\"error\",\"errorType\":\"bad_data\",\"error\":\"oops\"}")));
-        com.example.entity.vo.response.RuntimeHistoryVO vo = provider.readRuntimeHistory(1);
-        Assertions.assertNotNull(vo);
-        Assertions.assertTrue(vo.getList().isEmpty(), "non-success 应不返回任何行");
+                        .withBody(json)));
+        com.example.entity.vo.response.RuntimeHistoryVO vo = provider.readRuntimeHistory(42);
+        Assertions.assertEquals(2, vo.getList().size(), "同 series 多行 export 仍应保留所有原始时间点");
+        Assertions.assertEquals(0.42, ((Number) vo.getList().get(0).get("cpuUsage")).doubleValue(), 1e-9);
+        Assertions.assertEquals(0.55, ((Number) vo.getList().get(1).get("cpuUsage")).doubleValue(), 1e-9);
     }
 
     @Test
     void readRuntimeHistoryShouldIgnoreSeriesWithoutRuntimePrefix() {
         // VM 偶发返回非 runtime_ 命名（如其他工具污染同库），需被过滤
         String json = """
-                {
-                  "status": "success",
-                  "data": {
-                    "resultType": "matrix",
-                    "result": [
-                      {
-                        "metric": {"__name__": "other_metric", "clientId": "42"},
-                        "values": [[1700000000.0, "999"]]
-                      },
-                      {
-                        "metric": {"__name__": "runtime_cpuUsage", "clientId": "42"},
-                        "values": [[1700000000.0, "0.42"]]
-                      }
-                    ]
-                  }
-                }
+                {"metric":{"__name__":"other_metric","clientId":"42"},"values":[999],"timestamps":[1700000000000]}
+                {"metric":{"__name__":"runtime_cpuUsage","clientId":"42"},"values":[0.42],"timestamps":[1700000000000]}
                 """;
-        wireMock.stubFor(post(urlPathEqualTo("/api/v1/query_range"))
+        wireMock.stubFor(post(urlPathEqualTo("/api/v1/export"))
                 .willReturn(aResponse().withStatus(200)
                         .withHeader("Content-Type", "application/json")
                         .withBody(json)));
