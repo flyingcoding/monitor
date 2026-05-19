@@ -136,9 +136,14 @@ public final class OtlpMetricParser {
                     log.warn("OTLP metric {} 数据点未携带数值，跳过", name);
                     continue;
                 }
+                long timeUnixNano = dp.getTimeUnixNano();
+                if (!shouldReplaceMappedMetric(result, name, timeUnixNano)) {
+                    continue;
+                }
                 setter.accept(result.runtime, value.get());
                 result.mappedMetricNames.add(name);
-                long ts = dp.getTimeUnixNano() / 1_000_000L;
+                result.mappedMetricTimestamps.put(name, timeUnixNano);
+                long ts = timeUnixNano / 1_000_000L;
                 if (ts > result.runtime.getTimestamp()) {
                     result.runtime.setTimestamp(ts);
                 }
@@ -167,6 +172,17 @@ public final class OtlpMetricParser {
             }
         }
         return null;
+    }
+
+    /**
+     * 判断当前数据点是否应替换已映射的同名 metric。
+     *
+     * <p>同一个 ResourceMetrics 可能携带多个同名 Metric；按数据点时间戳选择最新值，
+     * 避免后遍历到的旧值覆盖已解析的新值。
+     */
+    private static boolean shouldReplaceMappedMetric(Result result, String metricName, long timeUnixNano) {
+        Long previous = result.mappedMetricTimestamps.get(metricName);
+        return previous == null || timeUnixNano >= previous;
     }
 
     /**
@@ -218,6 +234,9 @@ public final class OtlpMetricParser {
 
         /** 已成功映射到 {@link RuntimeDetailVO} 的 metric 名称集合。 */
         private final Set<String> mappedMetricNames = new HashSet<>();
+
+        /** 每个已映射 metric 名称对应的最新 OTLP 纳秒时间戳。 */
+        private final Map<String, Long> mappedMetricTimestamps = new HashMap<>();
 
         /**
          * 判断基础 7 项运行时 metric 是否齐全。

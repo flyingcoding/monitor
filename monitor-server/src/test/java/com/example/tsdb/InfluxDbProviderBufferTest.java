@@ -84,9 +84,10 @@ class InfluxDbProviderBufferTest {
         Files.writeString(bad, "{not valid json", StandardCharsets.UTF_8);
 
         Boolean ok = (Boolean) invoke("replaySingleFile", new Class[]{Path.class}, bad);
-        // JSON.parseObject 对非法字符串可能抛或返回 null —— 任一情况都不应丢失文件
-        Assertions.assertTrue(Files.exists(bad) || Files.exists(tempDir.resolve("archive").resolve(bad.getFileName())),
-                "失败重放必须保留原文件或归档以避免数据丢失：ok=" + ok);
+        Path archived = tempDir.resolve("archive").resolve(bad.getFileName());
+        Assertions.assertEquals(Boolean.FALSE, ok, "非法 JSONL 必须返回 false，等待下次重试");
+        Assertions.assertTrue(Files.exists(bad), "失败重放必须保留原文件，避免数据丢失");
+        Assertions.assertFalse(Files.exists(archived), "失败重放不能归档坏文件");
     }
 
     @Test

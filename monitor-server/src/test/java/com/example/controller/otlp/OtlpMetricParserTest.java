@@ -161,6 +161,24 @@ class OtlpMetricParserTest {
     }
 
     @Test
+    void shouldKeepNewestDuplicateWhitelistedMetricByName() {
+        long ts = nowNs();
+        ExportMetricsServiceRequest req = ExportMetricsServiceRequest.newBuilder()
+                .addResourceMetrics(ResourceMetrics.newBuilder()
+                        .addScopeMetrics(ScopeMetrics.newBuilder()
+                                .addMetrics(gauge("monitor.client.cpu_usage", 0.88, ts + 1_000))
+                                .addMetrics(gauge("monitor.client.cpu_usage", 0.22, ts))))
+                .build();
+
+        List<OtlpMetricParser.Result> results = OtlpMetricParser.parse(req);
+
+        Assertions.assertEquals(1, results.size());
+        Assertions.assertEquals(0.88, results.get(0).getRuntime().getCpuUsage(), 1e-9,
+                "重复同名 metric 必须保留最新 datapoint，不能被后遍历到的旧值覆盖");
+        Assertions.assertEquals((ts + 1_000) / 1_000_000L, results.get(0).getRuntime().getTimestamp());
+    }
+
+    @Test
     void shouldHandleMultipleResourceMetricsBlocks() {
         ExportMetricsServiceRequest req = ExportMetricsServiceRequest.newBuilder()
                 .addResourceMetrics(ResourceMetrics.newBuilder()
