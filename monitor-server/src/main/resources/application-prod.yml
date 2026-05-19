@@ -9,6 +9,7 @@ mybatis-plus:
     log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
 spring:
   influx:
+    # ⚠ Deprecated（v2.0-beta）：迁移到 monitor.tsdb.influxdb.*；启动时检测到旧 key 会打 WARN，v2.1.x 计划移除
     url: ${INFLUX_URL}
     user: ${INFLUX_USER}
     password: ${INFLUX_PASSWORD}
@@ -97,12 +98,26 @@ monitor:
     connect-timeout-ms: ${MONITOR_HEALTH_CHECK_CONNECT_TIMEOUT_MS:3000}
     failure-threshold: ${MONITOR_HEALTH_CHECK_FAILURE_THRESHOLD:3}
   influx-buffer:
+    # ⚠ Deprecated（v2.0-beta）：迁移到 monitor.tsdb.buffer.*；启动时旧目录 data/influx-buffer/ 会被自动迁移到 data/tsdb-buffer/
     dir: ${MONITOR_INFLUX_BUFFER_DIR:data/influx-buffer}
     replay-interval-ms: ${MONITOR_INFLUX_BUFFER_REPLAY_INTERVAL_MS:15000}
     batch-size: ${MONITOR_INFLUX_BUFFER_BATCH_SIZE:200}
-  # v2.0-alpha 时序后端适配层；victoria-metrics 占位实现，alpha 阶段自动回落到 influxdb
+  # v2.0-beta 时序后端适配层：influxdb（默认） / victoria-metrics（v2.0-beta 真实落地）
   tsdb:
     provider: ${MONITOR_TSDB_PROVIDER:influxdb}
+    influxdb:
+      url: ${INFLUX_URL}
+      user: ${INFLUX_USER}
+      password: ${INFLUX_PASSWORD}
+      bucket: ${INFLUX_BUCKET:program}
+      organization: ${INFLUX_ORG:flyingcoding}
+    victoria-metrics:
+      url: ${VM_URL:http://victoria-metrics:8428}
+      query-timeout-ms: ${VM_QUERY_TIMEOUT_MS:5000}
+    buffer:
+      dir: ${MONITOR_TSDB_BUFFER_DIR:data/tsdb-buffer}
+      replay-interval-ms: ${MONITOR_TSDB_BUFFER_REPLAY_INTERVAL_MS:15000}
+      batch-size: ${MONITOR_TSDB_BUFFER_BATCH_SIZE:200}
   # v2.0-alpha OTLP/HTTP 接收端点（POST /v1/metrics）
   otlp:
     enabled: ${MONITOR_OTLP_ENABLED:true}
@@ -110,7 +125,7 @@ monitor:
 resilience4j:
   circuitbreaker:
     instances:
-      influxdb:
+      tsdb:
         sliding-window-type: COUNT_BASED
         sliding-window-size: 10
         minimum-number-of-calls: 5

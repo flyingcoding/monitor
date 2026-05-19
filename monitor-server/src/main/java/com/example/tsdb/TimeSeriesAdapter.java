@@ -16,7 +16,7 @@ import com.example.entity.vo.response.RuntimeHistoryVO;
  *
  * <h3>降级与重放</h3>
  * <p>写入失败的降级（断路器 / 本地缓冲 / 调度重放）由实现内部封装，调用方不感知；
- * 见 {@link InfluxDbProvider} 的 Resilience4j {@code @CircuitBreaker(name="influxdb")} 与 JSONL 缓冲。
+ * 见 {@link InfluxDbProvider} 的 Resilience4j {@code @CircuitBreaker(name="tsdb")} 与 JSONL 缓冲。
  */
 public interface TimeSeriesAdapter {
 

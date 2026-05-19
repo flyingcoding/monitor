@@ -68,8 +68,8 @@ class InfluxDbProviderBufferTest {
                     "缓冲文件名需符合 <millis>-<uuid>.jsonl 约定，实际：" + name);
 
             String content = Files.readString(jsonl.get(0), StandardCharsets.UTF_8).trim();
-            InfluxDbProvider.InfluxBufferRecord record =
-                    JSON.parseObject(content, InfluxDbProvider.InfluxBufferRecord.class);
+            InfluxDbProvider.TsdbBufferRecord record =
+                    JSON.parseObject(content, InfluxDbProvider.TsdbBufferRecord.class);
             Assertions.assertEquals(42, record.getClientId());
             Assertions.assertNotNull(record.getRuntime());
             Assertions.assertEquals(0.42, record.getRuntime().getCpuUsage(), 1e-9);
@@ -108,6 +108,57 @@ class InfluxDbProviderBufferTest {
             long count = files.filter(p -> p.getFileName().toString().endsWith(".jsonl")).count();
             Assertions.assertEquals(3, count, "3 次降级应生成 3 个独立缓冲文件，便于按时间顺序重放");
         }
+    }
+
+    @Test
+    void migrateLegacyBufferShouldMoveJsonlFilesFromOldDirectoryToNew() throws Exception {
+        // 准备：模拟 v1.x / v2.0-alpha 的旧目录 data/influx-buffer/
+        Path legacyDir = tempDir.resolve("legacy-influx-buffer");
+        Path legacyArchive = legacyDir.resolve("archive");
+        Files.createDirectories(legacyArchive);
+        Path legacyJsonl = legacyDir.resolve("1700000000000-aaa.jsonl");
+        Path legacyArchivedJsonl = legacyArchive.resolve("1690000000000-bbb.jsonl");
+        Files.writeString(legacyJsonl, "{\"clientId\":1}", StandardCharsets.UTF_8);
+        Files.writeString(legacyArchivedJsonl, "{\"clientId\":2}", StandardCharsets.UTF_8);
+
+        // 新目录：使用 tempDir 子目录作为 bufferDir
+        Path newDir = tempDir.resolve("new-tsdb-buffer");
+        ReflectionTestUtils.setField(provider, "bufferDir", newDir.toString());
+        // 通过反射改 LEGACY 常量不可行，转而显式调 moveJsonlFiles 验证 helper 语义
+        invoke("ensureBufferDirectories");
+        Method moveMethod = InfluxDbProvider.class.getDeclaredMethod("moveJsonlFiles", Path.class, Path.class);
+        moveMethod.setAccessible(true);
+        int movedRoot = (Integer) moveMethod.invoke(provider, legacyDir, newDir);
+        int movedArchive = (Integer) moveMethod.invoke(provider, legacyArchive, newDir.resolve("archive"));
+
+        Assertions.assertEquals(1, movedRoot, "根目录 JSONL 应被迁移到新目录");
+        Assertions.assertEquals(1, movedArchive, "archive 子目录 JSONL 应被迁移到新 archive 子目录");
+        Assertions.assertTrue(Files.exists(newDir.resolve(legacyJsonl.getFileName())),
+                "迁移后新目录必须保留同名文件");
+        Assertions.assertTrue(Files.exists(newDir.resolve("archive").resolve(legacyArchivedJsonl.getFileName())),
+                "迁移后新 archive 子目录必须保留同名文件");
+        Assertions.assertFalse(Files.exists(legacyJsonl), "迁移后旧文件应已移除");
+    }
+
+    @Test
+    void moveJsonlFilesShouldSkipExistingTargetWithoutOverwrite() throws Exception {
+        Path source = tempDir.resolve("src");
+        Path target = tempDir.resolve("tgt");
+        Files.createDirectories(source);
+        Files.createDirectories(target);
+        Path sourceFile = source.resolve("1700000000000-x.jsonl");
+        Files.writeString(sourceFile, "new content", StandardCharsets.UTF_8);
+        Path existing = target.resolve("1700000000000-x.jsonl");
+        Files.writeString(existing, "existing content", StandardCharsets.UTF_8);
+
+        Method moveMethod = InfluxDbProvider.class.getDeclaredMethod("moveJsonlFiles", Path.class, Path.class);
+        moveMethod.setAccessible(true);
+        int moved = (Integer) moveMethod.invoke(provider, source, target);
+        Assertions.assertEquals(0, moved, "目标已存在同名时不能覆盖，moveJsonlFiles 必须跳过");
+        Assertions.assertEquals("existing content", Files.readString(existing, StandardCharsets.UTF_8),
+                "目标文件内容不能被覆盖");
+        Assertions.assertTrue(Files.exists(sourceFile),
+                "源文件在跳过的情况下应保留，等待用户手工处理");
     }
 
     private Object invoke(String methodName) {
