@@ -2,16 +2,19 @@ package com.example.tsdb;
 
 import com.alibaba.fastjson2.JSON;
 import com.example.entity.vo.request.RuntimeDetailVO;
+import com.example.entity.vo.response.RuntimeHistoryVO;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Iterator;
 import java.util.List;
 import java.util.stream.Stream;
 
@@ -91,6 +94,31 @@ class InfluxDbProviderBufferTest {
     }
 
     @Test
+    void replaySingleFileShouldUseActiveAdapterWhenVictoriaMetricsConfigured() throws Exception {
+        RuntimeDetailVO vo = sampleVo();
+        InfluxDbProvider.TsdbBufferRecord record = new InfluxDbProvider.TsdbBufferRecord();
+        record.setClientId(42);
+        record.setRuntime(vo);
+        record.setBufferedAt(1_700_000_000_000L);
+        Path file = tempDir.resolve("1700000000000-vm-replay.jsonl");
+        Files.writeString(file, JSON.toJSONString(record) + System.lineSeparator(), StandardCharsets.UTF_8);
+
+        RecordingAdapter activeAdapter = new RecordingAdapter();
+        ReflectionTestUtils.setField(provider, "activeProvider", TsdbAdapterFactory.PROVIDER_VICTORIA_METRICS);
+        ReflectionTestUtils.setField(provider, "activeAdapterProvider", objectProvider(activeAdapter));
+
+        Boolean ok = (Boolean) invoke("replaySingleFile", new Class[]{Path.class}, file);
+
+        Assertions.assertEquals(Boolean.TRUE, ok, "VM 模式下重放成功后应归档原文件");
+        Assertions.assertEquals(1, activeAdapter.writeCount, "VM 模式下必须通过当前 active adapter 重放");
+        Assertions.assertEquals(42, activeAdapter.lastClientId);
+        Assertions.assertEquals(vo.getTimestamp(), activeAdapter.lastRuntime.getTimestamp());
+        Assertions.assertEquals(vo.getCpuUsage(), activeAdapter.lastRuntime.getCpuUsage(), 1e-9);
+        Assertions.assertTrue(Files.exists(tempDir.resolve("archive").resolve(file.getFileName())),
+                "重放成功的文件应移动到 archive");
+    }
+
+    @Test
     void archiveDirectoryShouldExistAfterEnsureBufferDirectories() {
         Path archive = tempDir.resolve("archive");
         Assertions.assertTrue(Files.exists(archive), "ensureBufferDirectories 必须创建 archive 子目录");
@@ -141,6 +169,25 @@ class InfluxDbProviderBufferTest {
     }
 
     @Test
+    void migrateLegacyBufferShouldUseConfiguredLegacyDirectory() throws Exception {
+        Path legacyDir = tempDir.resolve("custom-old-buffer");
+        Files.createDirectories(legacyDir);
+        Path legacyJsonl = legacyDir.resolve("1700000000000-custom.jsonl");
+        Files.writeString(legacyJsonl, "{\"clientId\":9}", StandardCharsets.UTF_8);
+
+        Path newDir = tempDir.resolve("new-buffer-from-config");
+        ReflectionTestUtils.setField(provider, "bufferDir", newDir.toString());
+        ReflectionTestUtils.setField(provider, "legacyConfiguredBufferDir", legacyDir.toString());
+        invoke("ensureBufferDirectories");
+
+        invoke("migrateLegacyBufferIfNeeded");
+
+        Assertions.assertTrue(Files.exists(newDir.resolve(legacyJsonl.getFileName())),
+                "显式配置的旧 monitor.influx-buffer.dir 应迁移到新 TSDB 缓冲目录");
+        Assertions.assertFalse(Files.exists(legacyJsonl), "迁移后旧自定义目录中的 JSONL 应移除");
+    }
+
+    @Test
     void moveJsonlFilesShouldSkipExistingTargetWithoutOverwrite() throws Exception {
         Path source = tempDir.resolve("src");
         Path target = tempDir.resolve("tgt");
@@ -172,6 +219,86 @@ class InfluxDbProviderBufferTest {
             return m.invoke(provider, args);
         } catch (Exception e) {
             throw new RuntimeException("反射调用 " + methodName + " 失败", e);
+        }
+    }
+
+    private RuntimeDetailVO sampleVo() {
+        RuntimeDetailVO vo = new RuntimeDetailVO();
+        ReflectionTestUtils.setField(vo, "timestamp", 1_700_000_000_000L);
+        ReflectionTestUtils.setField(vo, "cpuUsage", 0.42);
+        ReflectionTestUtils.setField(vo, "memoryUsage", 8.0);
+        ReflectionTestUtils.setField(vo, "diskUsage", 100.0);
+        ReflectionTestUtils.setField(vo, "networkUpload", 12.5);
+        ReflectionTestUtils.setField(vo, "networkDownload", 25.0);
+        ReflectionTestUtils.setField(vo, "diskRead", 1.0);
+        ReflectionTestUtils.setField(vo, "diskWrite", 2.0);
+        return vo;
+    }
+
+    private static ObjectProvider<TimeSeriesAdapter> objectProvider(TimeSeriesAdapter adapter) {
+        return new ObjectProvider<>() {
+            @Override
+            public TimeSeriesAdapter getObject(Object... args) {
+                return adapter;
+            }
+
+            @Override
+            public TimeSeriesAdapter getIfAvailable() {
+                return adapter;
+            }
+
+            @Override
+            public TimeSeriesAdapter getIfUnique() {
+                return adapter;
+            }
+
+            @Override
+            public TimeSeriesAdapter getObject() {
+                return adapter;
+            }
+
+            @Override
+            public Iterator<TimeSeriesAdapter> iterator() {
+                return List.of(adapter).iterator();
+            }
+
+            @Override
+            public Stream<TimeSeriesAdapter> stream() {
+                return Stream.of(adapter);
+            }
+
+            @Override
+            public Stream<TimeSeriesAdapter> orderedStream() {
+                return Stream.of(adapter);
+            }
+        };
+    }
+
+    private static class RecordingAdapter implements TimeSeriesAdapter {
+        private int writeCount;
+        private int lastClientId;
+        private RuntimeDetailVO lastRuntime;
+
+        @Override
+        public void writeRuntime(int clientId, RuntimeDetailVO vo) {
+            writeCount++;
+            lastClientId = clientId;
+            lastRuntime = vo;
+        }
+
+        @Override
+        public void writeOtlpMetric(int clientId, RuntimeDetailVO vo) {
+            writeRuntime(clientId, vo);
+        }
+
+        @Override
+        public RuntimeHistoryVO readRuntimeHistory(int clientId) {
+            return new RuntimeHistoryVO();
+        }
+
+        @Override
+        public double[] readAvailabilityBuckets(int clientId) {
+            return new double[0];
         }
     }
 }

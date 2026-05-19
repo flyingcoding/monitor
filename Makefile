@@ -45,7 +45,8 @@ down:
 
 # v2.0-beta：单独停止 VictoriaMetrics 容器，不影响其它服务。
 down-vm:
-	docker compose --profile vm down
+	docker compose --profile vm stop victoria-metrics
+	docker compose --profile vm rm -f victoria-metrics
 
 dev-server:
 	cd monitor-server && mvn spring-boot:run -Pdev

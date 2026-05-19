@@ -115,9 +115,9 @@ monitor:
       url: ${VM_URL:http://victoria-metrics:8428}
       query-timeout-ms: ${VM_QUERY_TIMEOUT_MS:5000}
     buffer:
-      dir: ${MONITOR_TSDB_BUFFER_DIR:data/tsdb-buffer}
-      replay-interval-ms: ${MONITOR_TSDB_BUFFER_REPLAY_INTERVAL_MS:15000}
-      batch-size: ${MONITOR_TSDB_BUFFER_BATCH_SIZE:200}
+      dir: ${MONITOR_TSDB_BUFFER_DIR:${MONITOR_INFLUX_BUFFER_DIR:data/tsdb-buffer}}
+      replay-interval-ms: ${MONITOR_TSDB_BUFFER_REPLAY_INTERVAL_MS:${MONITOR_INFLUX_BUFFER_REPLAY_INTERVAL_MS:15000}}
+      batch-size: ${MONITOR_TSDB_BUFFER_BATCH_SIZE:${MONITOR_INFLUX_BUFFER_BATCH_SIZE:200}}
   # v2.0-alpha OTLP/HTTP 接收端点（POST /v1/metrics）
   otlp:
     enabled: ${MONITOR_OTLP_ENABLED:true}

@@ -16,6 +16,8 @@ import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.BeanUtils;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -58,10 +60,10 @@ import java.util.concurrent.locks.ReentrantLock;
  * <ul>
  *   <li>新配置：{@code monitor.tsdb.influxdb.{url,user,password,bucket,organization}} +
  *       {@code monitor.tsdb.buffer.{dir,replay-interval-ms,batch-size}}。</li>
- *   <li>兼容兜底：旧配置 {@code spring.influx.*} 与 {@code monitor.influx-buffer.*} 通过嵌套占位符仍可读，
- *       但启动时由 {@code TsdbConfigDeprecationListener} 打 WARN，预计在 v2.1.x 移除。</li>
+ *   <li>兼容兜底：旧配置 {@code spring.influx.*} 仍通过嵌套占位符可读；旧
+ *       {@code monitor.influx-buffer.dir} 若显式配置，会作为迁移来源目录。</li>
  *   <li>缓冲目录从 {@code data/influx-buffer/} 改名为 {@code data/tsdb-buffer/}；启动时若检测到旧目录
- *       存在且新目录为空，则自动把 JSONL 文件迁移过来，避免历史降级数据丢失。</li>
+ *       存在，则自动把 JSONL 文件迁移过来（目标同名文件不覆盖），避免历史降级数据丢失。</li>
  * </ul>
  */
 @Slf4j
@@ -98,8 +100,17 @@ public class InfluxDbProvider implements TimeSeriesAdapter {
     @Value("${monitor.tsdb.buffer.dir:${monitor.influx-buffer.dir:data/tsdb-buffer}}")
     private String bufferDir;
 
+    @Value("${monitor.influx-buffer.dir:}")
+    private String legacyConfiguredBufferDir;
+
+    @Value("${monitor.tsdb.provider:influxdb}")
+    private String activeProvider;
+
     @Value("${monitor.tsdb.buffer.batch-size:${monitor.influx-buffer.batch-size:200}}")
     private int replayBatchSize;
+
+    @Autowired(required = false)
+    private ObjectProvider<TimeSeriesAdapter> activeAdapterProvider;
 
     private InfluxDBClient client;
     private WriteApiBlocking writeApi;
@@ -108,7 +119,7 @@ public class InfluxDbProvider implements TimeSeriesAdapter {
     /**
      * 初始化 InfluxDB 客户端与同步写入 API，并创建缓冲目录。
      *
-     * <p>启动时若检测到旧缓冲目录 {@link #LEGACY_BUFFER_DIR} 存在且新缓冲目录为空，
+     * <p>启动时若检测到旧缓冲目录 {@link #LEGACY_BUFFER_DIR} 或显式配置的旧目录存在，
      * 会自动迁移 JSONL 文件，避免 v1.x → v2.0-beta 升级时历史降级数据丢失。
      */
     @PostConstruct
@@ -151,6 +162,16 @@ public class InfluxDbProvider implements TimeSeriesAdapter {
     private void writeToFileBuffer(int clientId, RuntimeDetailVO vo, Throwable throwable) {
         log.warn("InfluxDB 写入降级到本地缓冲，clientId={}, reason={}", clientId,
                 throwable == null ? "unknown" : throwable.getMessage());
+        this.bufferRuntime(clientId, vo);
+    }
+
+    /**
+     * 将运行时数据写入共享 TSDB JSONL 缓冲，不尝试写任何具体后端。
+     *
+     * @param clientId 客户端 ID
+     * @param vo       运行时数据
+     */
+    public void bufferRuntime(int clientId, RuntimeDetailVO vo) {
         this.appendBufferRecord(clientId, vo);
     }
 
@@ -305,7 +326,7 @@ public class InfluxDbProvider implements TimeSeriesAdapter {
                 if (record == null || record.getRuntime() == null) {
                     continue;
                 }
-                this.doWriteRuntimeData(record.getClientId(), record.getRuntime());
+                this.writeBufferedRecord(record);
             }
             this.archiveFile(file);
             return true;
@@ -343,13 +364,26 @@ public class InfluxDbProvider implements TimeSeriesAdapter {
     }
 
     /**
-     * 启动时检测旧缓冲目录 {@link #LEGACY_BUFFER_DIR}，若存在且与当前 {@link #bufferDir} 不一致，
-     * 则把根目录下与 {@code archive/} 子目录里的 JSONL 文件迁移到新目录。已存在同名文件不覆盖。
+     * 启动时检测默认旧缓冲目录 {@link #LEGACY_BUFFER_DIR} 以及显式配置的旧目录，若存在且与当前
+     * {@link #bufferDir} 不一致，则把根目录下与 {@code archive/} 子目录里的 JSONL 文件迁移到新目录。
+     * 已存在同名文件不覆盖。
      *
      * <p>该路径只在 v1.x / v2.0-alpha → v2.0-beta 升级路径上执行一次；预计在 v2.1.x 移除。
      */
     private void migrateLegacyBufferIfNeeded() {
-        Path legacy = Path.of(LEGACY_BUFFER_DIR);
+        this.migrateLegacyBufferDir(Path.of(LEGACY_BUFFER_DIR));
+        if (legacyConfiguredBufferDir == null || legacyConfiguredBufferDir.isBlank()) {
+            return;
+        }
+        this.migrateLegacyBufferDir(Path.of(legacyConfiguredBufferDir));
+    }
+
+    /**
+     * 把指定旧缓冲目录中的 JSONL 文件迁移到当前 {@link #bufferDir}。
+     *
+     * @param legacy 旧缓冲目录
+     */
+    private void migrateLegacyBufferDir(Path legacy) {
         Path current = Path.of(bufferDir);
         try {
             if (!Files.exists(legacy) || Files.isSameFile(legacy, current)) {
@@ -370,6 +404,26 @@ public class InfluxDbProvider implements TimeSeriesAdapter {
             log.warn("旧 TSDB 缓冲目录 {} 检测到 {} 个 JSONL（含 archive {} 个），已迁移到新目录 {}；建议手工清理旧目录",
                     legacy, moved, movedArchive, current);
         }
+    }
+
+    /**
+     * 按当前激活 provider 重放一条缓冲记录。
+     *
+     * <p>默认 / 未识别 provider 仍直写 InfluxDB，保留旧行为；当配置为
+     * {@code victoria-metrics} 时，重放交给当前 {@link TimeSeriesAdapter}，确保 VM outage
+     * 期间落入共享 JSONL 的数据恢复后写回 VM，而不是误写到 InfluxDB。
+     *
+     * @param record 缓冲记录
+     */
+    private void writeBufferedRecord(TsdbBufferRecord record) {
+        if (TsdbAdapterFactory.PROVIDER_VICTORIA_METRICS.equalsIgnoreCase(activeProvider)) {
+            TimeSeriesAdapter adapter = activeAdapterProvider == null ? null : activeAdapterProvider.getIfAvailable();
+            if (adapter != null && adapter != this) {
+                adapter.writeRuntime(record.getClientId(), record.getRuntime());
+                return;
+            }
+        }
+        this.doWriteRuntimeData(record.getClientId(), record.getRuntime());
     }
 
     /**

@@ -41,8 +41,8 @@ import java.util.TreeMap;
  *       （{@code POST /api/v2/write}），可直接复用 {@code influxdb-client-java}。
  *       VM 忽略 org / bucket / token，但 SDK 要求非空，使用 {@code monitor} / {@code _} 占位。</li>
  *   <li><b>断路器共享</b>：与 {@link InfluxDbProvider} 共用 {@code @CircuitBreaker(name="tsdb")}，
- *       同一份断路器配置可控制两种 provider 的 fallback 节奏；fallback 走
- *       {@link InfluxDbProvider#writeRuntime} 的同款 JSONL 缓冲（PR1 已重命名为 tsdb-buffer）。</li>
+ *       同一份断路器配置可控制两种 provider 的 fallback 节奏；fallback 只写共享 JSONL 缓冲，
+ *       不把 VM 失败样本误写入 InfluxDB。</li>
  *   <li><b>JSONL 缓冲复用</b>：直接注入 {@link InfluxDbProvider} 作为 fallback 写入目标。
  *       这避免重写一份 buffer 路径，并保证切换 provider 时旧缓冲可被重放。</li>
  *   <li><b>查询路径</b>：用 Spring {@link RestClient} 调 VM 的 PromQL 端点 {@code /api/v1/query_range}：
@@ -156,7 +156,7 @@ public class VictoriaMetricsProvider implements TimeSeriesAdapter {
 
     /**
      * 断路器回退逻辑：VM 写入失败时把数据交给共享 JSONL 缓冲（{@link InfluxDbProvider}），
-     * 由 {@link InfluxDbProvider#replayBufferedData} 后台调度重放——重放时仍走当前活跃 provider，
+     * 由 {@link InfluxDbProvider#replayBufferedData} 后台调度重放——重放时走当前活跃 provider，
      * 也就是 VM 自身；这样确保 v1.x 缓冲与 v2.0-beta 缓冲共享同一份"未传送"队列。
      *
      * @param clientId  客户端 ID
@@ -166,10 +166,7 @@ public class VictoriaMetricsProvider implements TimeSeriesAdapter {
     private void writeToFallbackBuffer(int clientId, RuntimeDetailVO vo, Throwable throwable) {
         log.warn("VictoriaMetrics 写入降级到本地缓冲，clientId={}, reason={}", clientId,
                 throwable == null ? "unknown" : throwable.getMessage());
-        // 直接调用 buffer 写入路径；InfluxDbProvider.writeRuntime 自身也会走 @CircuitBreaker，
-        // 当 VM 与 Influx 同时不可用时，会重入 InfluxDbProvider 的 writeToFileBuffer 走 JSONL。
-        // 这里通过 @CircuitBreaker 隔离的两层 fallback 形成"VM → Influx → JSONL"的级联降级。
-        fallbackBuffer.writeRuntime(clientId, vo);
+        fallbackBuffer.bufferRuntime(clientId, vo);
     }
 
     /**

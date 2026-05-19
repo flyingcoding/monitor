@@ -1,17 +1,23 @@
 package com.example.tsdb;
 
+import com.alibaba.fastjson2.JSON;
 import com.example.entity.vo.request.RuntimeDetailVO;
 import com.github.tomakehurst.wiremock.WireMockServer;
-import com.github.tomakehurst.wiremock.client.WireMock;
 import com.github.tomakehurst.wiremock.core.WireMockConfiguration;
 import com.github.tomakehurst.wiremock.matching.RequestPatternBuilder;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.lang.reflect.Method;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.List;
+import java.util.stream.Stream;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.aResponse;
 import static com.github.tomakehurst.wiremock.client.WireMock.containing;
@@ -26,9 +32,9 @@ import static com.github.tomakehurst.wiremock.client.WireMock.urlPathEqualTo;
  * 覆盖：
  * <ul>
  *   <li>写入成功路径：line protocol 中包含 {@code runtime} measurement 与各 field；</li>
- *   <li>写入失败路径：5xx 时通过 fallback 路径降级到 {@link InfluxDbProvider} 共享 JSONL 缓冲；</li>
+ *   <li>写入失败路径：fallback 路径只落共享 JSONL 缓冲，不误写 InfluxDB；</li>
  *   <li>构造器约束：{@link InfluxDbProvider} 必须注入；</li>
- *   <li>read 方法在 PR3 之前抛 {@link UnsupportedOperationException}（含明确升级提示）；</li>
+ *   <li>read 方法通过 MetricsQL 查询并映射为前端兼容 VO；</li>
  *   <li>{@code @CircuitBreaker} 与 {@code @PreDestroy} 注解保持原状。</li>
  * </ul>
  *
@@ -41,6 +47,9 @@ class VictoriaMetricsProviderTest {
     private WireMockServer wireMock;
     private InfluxDbProvider fallback;
     private VictoriaMetricsProvider provider;
+
+    @TempDir
+    Path tempDir;
 
     @BeforeEach
     void setUp() {
@@ -260,38 +269,26 @@ class VictoriaMetricsProviderTest {
     }
 
     @Test
-    void fallbackMethodShouldDelegateToInfluxBufferOnFailure() throws Exception {
-        // 不依赖 Spring AOP；直接反射调 writeToFallbackBuffer 验证降级路径调用了 fallback bean
-        WireMockServer dummyInflux = new WireMockServer(WireMockConfiguration.options().dynamicPort());
-        dummyInflux.start();
-        try {
-            dummyInflux.stubFor(post(WireMock.urlPathMatching("/.*"))
-                    .willReturn(aResponse().withStatus(503)));
-            ReflectionTestUtils.setField(fallback, "url", dummyInflux.baseUrl());
-            ReflectionTestUtils.setField(fallback, "user", "_");
-            ReflectionTestUtils.setField(fallback, "password", "_");
-            ReflectionTestUtils.setField(fallback, "bucket", "_");
-            ReflectionTestUtils.setField(fallback, "organization", "_");
-            ReflectionTestUtils.setField(fallback, "bufferDir",
-                    java.nio.file.Files.createTempDirectory("vm-fallback-").toString());
-            fallback.init();
+    void fallbackMethodShouldWriteSharedBufferOnlyOnFailure() throws Exception {
+        Path bufferDir = tempDir.resolve("vm-fallback");
+        ReflectionTestUtils.setField(fallback, "bufferDir", bufferDir.toString());
 
-            Method m = VictoriaMetricsProvider.class.getDeclaredMethod(
-                    "writeToFallbackBuffer", int.class, RuntimeDetailVO.class, Throwable.class);
-            m.setAccessible(true);
+        Method m = VictoriaMetricsProvider.class.getDeclaredMethod(
+                "writeToFallbackBuffer", int.class, RuntimeDetailVO.class, Throwable.class);
+        m.setAccessible(true);
+        m.invoke(provider, 5, sampleVo(), new RuntimeException("simulated VM failure"));
 
-            // 由于 fallback.writeRuntime 自身在没有 Spring AOP 时会直接执行 doWriteRuntimeData → 调到 dummyInflux 503
-            // 但 InfluxDB SDK 抛出的异常会被反射调用捕获并向上抛，这里要确保 fallback 路径至少被进入
-            Assertions.assertDoesNotThrow(() -> {
-                try {
-                    m.invoke(provider, 5, sampleVo(), new RuntimeException("simulated VM failure"));
-                } catch (java.lang.reflect.InvocationTargetException ite) {
-                    // 包装层异常允许向上抛（fallback 自身没 AOP），但断言路径被进入
-                }
-            });
-        } finally {
-            fallback.close();
-            dummyInflux.stop();
+        try (Stream<Path> files = Files.list(bufferDir)) {
+            List<Path> jsonl = files
+                    .filter(p -> p.getFileName().toString().endsWith(".jsonl"))
+                    .toList();
+            Assertions.assertEquals(1, jsonl.size(), "VM fallback 必须只生成 1 个共享 JSONL 缓冲文件");
+            String content = Files.readString(jsonl.get(0), StandardCharsets.UTF_8).trim();
+            InfluxDbProvider.TsdbBufferRecord record =
+                    JSON.parseObject(content, InfluxDbProvider.TsdbBufferRecord.class);
+            Assertions.assertEquals(5, record.getClientId());
+            Assertions.assertNotNull(record.getRuntime());
+            Assertions.assertEquals(0.42, record.getRuntime().getCpuUsage(), 1e-9);
         }
     }
 
