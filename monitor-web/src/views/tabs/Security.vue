@@ -8,6 +8,7 @@ import CreateSubAccount from '@/component/CreateSubAccount.vue'
 import ApiTokens from '@/component/ApiTokens.vue'
 import OidcBindings from '@/component/OidcBindings.vue'
 import OidcProviders from '@/component/OidcProviders.vue'
+import NotificationPreference from '@/component/NotificationPreference.vue'
 import { useStore } from '@/store'
 
 const store = useStore()
@@ -229,6 +230,9 @@ function deleteAccount(id) {
         </div>
         <div style="margin-top: 10px">
           <api-tokens />
+        </div>
+        <div style="margin-top: 10px">
+          <notification-preference />
         </div>
       </div>
       <div style="flex: 50%; display: flex; flex-direction: column; gap: 10px">

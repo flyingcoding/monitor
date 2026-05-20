@@ -61,6 +61,7 @@ import { Back, Moon, Sunny } from '@element-plus/icons-vue'
 import { onMounted, onBeforeUnmount, ref, watch, computed } from 'vue'
 import { useDark } from '@vueuse/core'
 import { useRoute } from 'vue-router'
+import { ElMessageBox } from 'element-plus'
 import TabItem from '@/component/TabItem.vue'
 import NotificationBell from '@/component/NotificationBell.vue'
 import { useStore } from '@/store'
@@ -78,6 +79,16 @@ const tabs = [
   { id: 4, name: '状态页', route: 'status-page-config', adminOnly: true },
   { id: 5, name: '探测', route: 'probes', adminOnly: true }
 ]
+
+/** 首次访问 Notification 引导：localStorage 键，记录上次 dismiss 时间戳（毫秒）。 */
+const NOTIFICATION_PROMPT_KEY = 'notification_prompt_dismissed_at'
+/** dismiss 后冷却 30 天，再 prompt 一次。 */
+const NOTIFICATION_PROMPT_COOLDOWN_MS = 30 * 24 * 60 * 60 * 1000
+/** 延迟 5 秒触发，避免与 SSE 连接、路由动画相互打架。 */
+const NOTIFICATION_PROMPT_DELAY_MS = 5000
+
+/** 用于 onBeforeUnmount 清理 setTimeout 句柄。 */
+let notificationPromptTimer = null
 
 /**
  * 根据当前路由名称推断激活的 tab id，告警相关子路由统一归到告警 tab。
@@ -116,14 +127,65 @@ function userLogout() {
   logout(() => router.push('/'))
 }
 
+/**
+ * 首次访问通知引导：登录后延迟 5 秒，按以下条件决定是否弹出 confirm：
+ * - 浏览器支持 Notification API（permission != 'unsupported'）
+ * - 当前权限为 'default'（用户既未授权也未拒绝）
+ * - 30 天内未 dismiss 过本次 prompt
+ * 用户确认 → 触发 requestPermission；取消或确认后均写 dismissed_at，避免短期内重复骚扰。
+ */
+function maybePromptForNotification() {
+  if (notificationStore.permission !== 'default') return
+  let dismissedAt = 0
+  try {
+    const raw = localStorage.getItem(NOTIFICATION_PROMPT_KEY)
+    dismissedAt = raw ? Number(raw) : 0
+  } catch (_e) {
+    dismissedAt = 0
+  }
+  if (dismissedAt && Date.now() - dismissedAt < NOTIFICATION_PROMPT_COOLDOWN_MS) return
+  ElMessageBox.confirm(
+    '订阅告警事件后，关键告警（警告 / 严重）会在桌面弹出提醒。是否启用浏览器通知？',
+    '开启浏览器通知',
+    {
+      confirmButtonText: '启用',
+      cancelButtonText: '暂不启用',
+      type: 'info'
+    }
+  )
+    .then(async () => {
+      await notificationStore.requestPermission()
+      try {
+        localStorage.setItem(NOTIFICATION_PROMPT_KEY, String(Date.now()))
+      } catch (_e) {
+        /* 写入失败忽略，下次仍会 prompt */
+      }
+    })
+    .catch(() => {
+      try {
+        localStorage.setItem(NOTIFICATION_PROMPT_KEY, String(Date.now()))
+      } catch (_e) {
+        /* 同上 */
+      }
+    })
+}
+
 onMounted(() => {
   connectAlertSse((event) => {
     notificationStore.pushAlert(event)
   })
+  notificationPromptTimer = setTimeout(() => {
+    notificationPromptTimer = null
+    maybePromptForNotification()
+  }, NOTIFICATION_PROMPT_DELAY_MS)
 })
 
 onBeforeUnmount(() => {
   closeAlertSse()
+  if (notificationPromptTimer) {
+    clearTimeout(notificationPromptTimer)
+    notificationPromptTimer = null
+  }
 })
 </script>
 
