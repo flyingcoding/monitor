@@ -424,7 +424,8 @@ P1 (完成)     OIDC/SSO → 公开状态页 → REST API+Token              [v1
 P2 (完成)     服务探测 → 进程监控 → GPU → SMART → systemd → 测试    [v1.3] ✅ 2026-05-18
 P3 (alpha 完成) OTLP 指标接收 + 时序 DB 适配层骨架                 [v2.0-alpha] ✅ 2026-05-18
 P3 (beta 完成)  VictoriaMetrics Provider 真实实现 + vmctl 迁移工具 [v2.0-beta] ✅ 2026-05-19
-P4 (中期)     Web 终端多 Tab + SFTP → 集成测试 → E2E               [v2.0]
+P4 (frontend 完成) Dashboard 时间范围 + CSV 导出 + Notification 补齐 [v2.0-frontend-ux] ✅ 2026-05-20
+P4 (剩余)     Web 终端多 Tab + SFTP → 集成测试 → E2E + 性能优化     [v2.0]
 P5 (长期)     部署体验 → 性能优化 → 多租户                          [v3.0+]
 P6 (可选)     SaaS 模式 → 合规与审计                                [v3.0+]
 ```
@@ -462,7 +463,8 @@ P6 (可选)     SaaS 模式 → 合规与审计                                [
 2027 Q1  v1.3            监控增强（探测 + 进程 + GPU + SMART + systemd + 测试覆盖启动）   ✅ 2026-05-18
 2027 Q2  v2.0-alpha      OTLP 接收端点 + 时序 DB 适配层骨架                              ✅ 2026-05-18
 2027 Q3  v2.0-beta       VictoriaMetrics Provider + vmctl 迁移工具                       ✅ 2026-05-19
-2027 Q4  v2.0            Web 终端多 Tab + SFTP + 集成测试 + E2E
+2027 Q4  v2.0-frontend-ux Dashboard 时间范围 + CSV 导出 + Notification 补齐              ✅ 2026-05-20
+2027 Q4  v2.0            Web 终端多 Tab + SFTP + 集成测试 + E2E + 性能优化
 2028+    v3.0+           部署体验 / 性能优化 / 多租户 / 可选 SaaS / 合规审计
 ```
 
@@ -591,6 +593,58 @@ JaCoCo verify 通过（`com.example.service.impl` LINE ≥ 60% 未回归）。
 - OTLP gRPC / Logs / Traces
 - 前端 provider 切换 UI
 - OTLP source label
+
+
+### v2.0-frontend-ux 实施记录（2026-05-20）
+
+> PRD：`.trellis/tasks/05-20-v2-0-frontend-ux-timerange-csv-notification/prd.md`（D1–D6）
+
+**仍零 schema 变更**——v2.0-frontend-ux 是纯前后端体验补齐，未新增 / 修改 MySQL 表或 InfluxDB / VM measurement。
+
+| 改动文件 / 新增 | 范围 |
+|---------------|------|
+| `com.example.tsdb.TimeSeriesAdapter` | 接口签名 `readRuntimeHistory(int)` → `readRuntimeHistory(int, Instant from, Instant to)`，删除「1 小时」硬编码描述 |
+| `com.example.tsdb.TsdbQueryUtils`（新增） | `chooseStep(Duration)` 公共方法，step 表：≤1h→10s / ≤6h→30s / ≤24h→2min / ≤7d→10min / 其他→ceil(window/1500)s |
+| `com.example.tsdb.InfluxDbProvider` | `readRuntimeHistory` Flux `range(start, stop)` + `aggregateWindow(every: step, fn: mean, createEmpty: false)` 替代 1h 硬编码 |
+| `com.example.tsdb.VictoriaMetricsProvider` | `readRuntimeHistory` 用 `/api/v1/export` + `downsampleByMean` 进程内桶均值下采样；**不**用 `/api/v1/query_range`（spec database-guidelines.md §89 明确禁止：lookback 合成假点） |
+| `com.example.service.ClientService` + Impl | `clientRuntimeDetailsHistory(int, Instant, Instant)` 透传到 adapter |
+| `com.example.controller.MonitorController` | `/api/monitor/runtime_history` 加可选 `@DateTimeFormat(ISO.DATE_TIME) Instant from / to`；缺省 `to=now, from=now-1h`（向后兼容旧前端）；校验 `from < to` + 跨度 ≤ 7d → BAD_REQUEST |
+| `monitor-web/src/component/ClientDetails.vue` | 顶部时间范围工具栏：4 预设按钮（1h/6h/24h/7d）+ datetimerange 自定义（`disabledDate` 限 7d）+ "导出 CSV" 按钮；SSE 增量仅在 `preset==='1h'` 拼接（其他时段视图冻结避免聚合点+原始点混渲染） |
+| `monitor-web/src/tools/csv.js`（新增） | 通用 `buildCsv` + `downloadCsv` 工具：RFC 4180 转义 + UTF-8 BOM + Blob 下载；列定义可参数化（为未来探测 / 告警 CSV 留口） |
+| `monitor-web/src/store/notification.js` | 加 `settings: { enabled, minLevel }` 持久化（pinia-plugin-persistedstate `paths: ['settings']`）；`tryNotify` 改读 settings 决定是否弹 |
+| `monitor-web/src/views/IndexView.vue` | `onMounted` 延迟 5s 触发首次访问 Notification 权限 prompt（`permission==='default'` + localStorage cooldown 30 天） |
+| `monitor-web/src/component/NotificationPreference.vue`（新增） | Security tab 下偏好设置：启用开关 + 等级 radio + 权限状态展示 |
+| `monitor-web/src/views/tabs/Security.vue` | 注入 `<notification-preference />` 到左侧栏 ApiTokens 下方 |
+| `monitor-web/vitest.config.js`（新增） | 包装 `vite.config.js`，加 `server.deps.inline: [/element-plus/]` 让 Element Plus CSS 通过 Vite transform，解决 Node ESM 拒绝 `.css` 导入问题 |
+
+**调用方无需改动**：业务 VO `RuntimeHistoryVO` / `RuntimeDetailVO` 形状不变；前端 SSE 实时流（`/api/sse/runtime/{id}`）解耦。
+
+**6 项决策（D1–D6）**：
+- D1 Notification 范围 → 首次引导 + 单测 + 设置中心（Approach C，差额补齐）
+- D2 时间范围 MVP → 1h/6h/24h/7d + datetimerange 自定义，硬上限 7d
+- D3 Adapter 接口 → 替换签名（Approach B），HTTP 层兜底 `from=now-1h, to=now` 兼容旧前端
+- D4 下采样 → 服务端 step-aware aggregate（mean）；VM 实装时偏离 PromQL `query_range` 走 `/api/v1/export` + 进程内 downsample（spec 约束，避免 lookback 合成假点）
+- D5 CSV 范围 → 与图表一致（聚合后），纯前端 Blob，零后端接口
+- D6 选择器位置 → 仅 ClientDetails 组件内，不进 Pinia store
+
+**测试覆盖**：
+- 后端测试增至 **404**（v2.0-beta 基线 375 → +29：TsdbQueryUtilsTest 15 + MonitorControllerTest 8 + VictoriaMetricsProviderTest +3 + 前后端 ISO 契约锁定 1 + 现有用例签名改造 2）
+- 前端测试 9 文件 / **56** 用例（v1.3 基线 28 → +28：csv 13 + notification store 16 + NotificationBell 7 + NotificationPreference 8 − 既有不变）
+- JaCoCo `com.example.service.impl.*` LINE 65%（≥ 60% 不回归）
+- `TsdbQueryUtils` 自身 LINE 100%
+
+**关键 caveat**：
+- VM history reads 必须用 `/api/v1/export`（不可用 `/api/v1/query_range`），spec 已在 v2.0-beta 落盘（database-guidelines.md §89）
+- 前端 ISO datetime 序列化用 `Date.prototype.toISOString()`（带毫秒、Z UTC 后缀），与 Spring `@DateTimeFormat(ISO.DATE_TIME)` 解析双向 bit-equal（已加契约锁定测试）
+- 切到 7d 视图时 SSE 增量不再拼接到 list（视图冻结），切回 1h 自动恢复实时拼接
+
+**未做（明确 out-of-scope）**：
+- Web 终端多 Tab / SFTP（v2.0 同档独立任务）
+- Testcontainers 集成测试 / Playwright E2E（v2.0 同档独立任务）
+- 后端写缓冲 / Redis 状态缓存 / 前端 LTTB Web Worker（v2.0 性能档独立任务）
+- 告警 / 探测 / SMART / GPU / 进程历史的 CSV 导出
+- 30d 时间范围 / 全局 Dashboard 时间联动
+- SSE 时间范围回放
 
 
 ---
