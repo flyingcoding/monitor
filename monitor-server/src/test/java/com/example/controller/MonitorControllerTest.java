@@ -1,5 +1,6 @@
 package com.example.controller;
 
+import com.example.controller.exceptionController.ValidationController;
 import com.example.entity.dto.Account;
 import com.example.entity.vo.response.RuntimeHistoryVO;
 import com.example.service.AccountService;
@@ -34,6 +35,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class MonitorControllerTest {
 
     private MockMvc mockMvc;
+    private MonitorController controller;
     private final AtomicReference<RuntimeHistoryVO> stubResponse = new AtomicReference<>();
     private final AtomicReference<Instant> capturedFrom = new AtomicReference<>();
     private final AtomicReference<Instant> capturedTo = new AtomicReference<>();
@@ -46,7 +48,7 @@ class MonitorControllerTest {
         capturedTo.set(null);
         capturedClientId.set(null);
 
-        MonitorController controller = new MonitorController();
+        controller = new MonitorController();
 
         ClientService clientService = (ClientService) Proxy.newProxyInstance(
                 ClientService.class.getClassLoader(),
@@ -187,6 +189,24 @@ class MonitorControllerTest {
                         .requestAttr(Const.ATTR_USER_ID, 100)
                         .requestAttr(Const.ATTR_USER_ROLE, "ROLE_admin"))
                 .andExpect(status().isBadRequest());
+    }
+
+    /**
+     * from/to 不是 ISO 时间字符串时，应由全局参数绑定异常处理器转换成 400，而不是落入 500。
+     */
+    @Test
+    void runtimeHistoryWithInvalidInstantFormatShouldReturnBadRequest() throws Exception {
+        MockMvc mvcWithAdvice = MockMvcBuilders.standaloneSetup(controller)
+                .setControllerAdvice(new ValidationController())
+                .build();
+        mvcWithAdvice.perform(get("/api/monitor/runtime_history")
+                        .param("clientId", "42")
+                        .param("from", "not-an-instant")
+                        .param("to", "2026-05-20T00:30:00Z")
+                        .requestAttr(Const.ATTR_USER_ID, 100)
+                        .requestAttr(Const.ATTR_USER_ROLE, "ROLE_admin"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(400));
     }
 
     /**

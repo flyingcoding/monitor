@@ -3,10 +3,13 @@ package com.example.controller.exceptionController;
 import com.example.entity.RestBean;
 import jakarta.validation.ValidationException;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.server.ResponseStatusException;
 
 @Slf4j
@@ -51,6 +54,20 @@ public class ValidationController {
     public RestBean<Void> httpMessageNotReadable(HttpMessageNotReadableException exception) {
         log.warn("请求体解析失败: {}", exception.getMessage());
         return RestBean.failure(400, "请求体格式错误");
+    }
+
+    /**
+     * 处理查询参数类型转换失败，例如 ISO 时间字符串格式错误。
+     *
+     * @param exception 参数类型转换异常
+     * @return 统一响应体
+     */
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    public RestBean<Void> methodArgumentTypeMismatch(MethodArgumentTypeMismatchException exception) {
+        log.warn("请求参数类型错误: name={}, value={}, targetType={}",
+                exception.getName(), exception.getValue(), exception.getRequiredType());
+        return RestBean.failure(400, "请求参数有误");
     }
 
     /**

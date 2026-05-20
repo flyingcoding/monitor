@@ -216,14 +216,18 @@ public class InfluxDbProvider implements TimeSeriesAdapter {
         RuntimeHistoryVO vo = new RuntimeHistoryVO();
         Duration window = Duration.between(from, to);
         Duration step = TsdbQueryUtils.chooseStep(window);
+        boolean nativeResolution = step.equals(TsdbQueryUtils.STEP_10S);
         String query = """
                 from(bucket: "%s")
                 |> range(start: %s, stop: %s)
                 |> filter(fn: (r) => r["_measurement"] == "runtime")
                 |> filter(fn: (r) => r["clientId"] == "%s")
-                |> aggregateWindow(every: %ds, fn: mean, createEmpty: false)
+                %s
                 """;
-        String format = String.format(query, bucket, from.toString(), to.toString(), clientId, step.toSeconds());
+        String aggregation = nativeResolution
+                ? ""
+                : String.format("|> aggregateWindow(every: %ds, fn: mean, createEmpty: false)", step.toSeconds());
+        String format = String.format(query, bucket, from.toString(), to.toString(), clientId, aggregation);
         List<FluxTable> tables = client.getQueryApi().query(format, organization);
         int size = tables.size();
         if (size == 0) return vo;

@@ -58,6 +58,7 @@ const timeRange = reactive({ preset: '1h', custom: null })
 const customRange = ref(null)
 // 上一次合法的 customRange 值，校验失败时回滚
 let lastValidCustomRange = null
+let historyRequestSeq = 0
 
 /**
  * 当前时间范围是否处于 "1h 实时" 模式：仅此模式下 SSE 增量会拼接到历史曲线，
@@ -245,6 +246,7 @@ const showGpuTab = computed(() => {
  */
 function loadHistory() {
   if (props.id === -1) return
+  const requestSeq = ++historyRequestSeq
   runtimeLoading.value = true
   details.runtime = { list: [] }
   const range = resolveQueryRange()
@@ -254,6 +256,7 @@ function loadHistory() {
     params.set('to', range.to)
   }
   get(`/api/monitor/runtime_history?${params.toString()}`, (data) => {
+    if (requestSeq !== historyRequestSeq) return
     Object.assign(details.runtime, data)
     runtimeLoading.value = false
   })
@@ -384,6 +387,7 @@ const init = (value) => {
     // 首次拉取走 loadHistory（preset === '1h' 时不传 from/to，与旧默认行为一致）
     loadHistory()
   } else {
+    historyRequestSeq++
     baseLoading.value = false
     runtimeLoading.value = false
     if (runtimeEventSource) {

@@ -605,7 +605,7 @@ JaCoCo verify 通过（`com.example.service.impl` LINE ≥ 60% 未回归）。
 |---------------|------|
 | `com.example.tsdb.TimeSeriesAdapter` | 接口签名 `readRuntimeHistory(int)` → `readRuntimeHistory(int, Instant from, Instant to)`，删除「1 小时」硬编码描述 |
 | `com.example.tsdb.TsdbQueryUtils`（新增） | `chooseStep(Duration)` 公共方法，step 表：≤1h→10s / ≤6h→30s / ≤24h→2min / ≤7d→10min / 其他→ceil(window/1500)s |
-| `com.example.tsdb.InfluxDbProvider` | `readRuntimeHistory` Flux `range(start, stop)` + `aggregateWindow(every: step, fn: mean, createEmpty: false)` 替代 1h 硬编码 |
+| `com.example.tsdb.InfluxDbProvider` | `readRuntimeHistory` Flux `range(start, stop)`；≤1h 保持原生 10s 点不聚合，>1h 才追加 `aggregateWindow(every: step, fn: mean, createEmpty: false)` 替代 1h 硬编码 |
 | `com.example.tsdb.VictoriaMetricsProvider` | `readRuntimeHistory` 用 `/api/v1/export` + `downsampleByMean` 进程内桶均值下采样；**不**用 `/api/v1/query_range`（spec database-guidelines.md §89 明确禁止：lookback 合成假点） |
 | `com.example.service.ClientService` + Impl | `clientRuntimeDetailsHistory(int, Instant, Instant)` 透传到 adapter |
 | `com.example.controller.MonitorController` | `/api/monitor/runtime_history` 加可选 `@DateTimeFormat(ISO.DATE_TIME) Instant from / to`；缺省 `to=now, from=now-1h`（向后兼容旧前端）；校验 `from < to` + 跨度 ≤ 7d → BAD_REQUEST |
