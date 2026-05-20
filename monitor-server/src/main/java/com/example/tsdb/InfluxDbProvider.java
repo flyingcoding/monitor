@@ -33,6 +33,8 @@ import java.time.Instant;
 import java.util.Comparator;
 import java.util.Date;
 import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
 import java.util.UUID;
 import java.util.concurrent.locks.ReentrantLock;
 
@@ -229,18 +231,24 @@ public class InfluxDbProvider implements TimeSeriesAdapter {
                 : String.format("|> aggregateWindow(every: %ds, fn: mean, createEmpty: false)", step.toSeconds());
         String format = String.format(query, bucket, from.toString(), to.toString(), clientId, aggregation);
         List<FluxTable> tables = client.getQueryApi().query(format, organization);
-        int size = tables.size();
-        if (size == 0) return vo;
-        List<FluxRecord> records = tables.get(0).getRecords();
-        for (int i = 0; i < records.size(); i++) {
-            JSONObject object = new JSONObject();
-            object.put("timestamp", records.get(i).getTime());
-            for (int j = 0; j < size; j++) {
-                FluxRecord record = tables.get(j).getRecords().get(i);
-                object.put(record.getField(), record.getValue());
+        if (tables.isEmpty()) return vo;
+        Map<Instant, JSONObject> byTime = new TreeMap<>();
+        for (FluxTable table : tables) {
+            for (FluxRecord record : table.getRecords()) {
+                Instant time = record.getTime();
+                String field = record.getField();
+                if (time == null || field == null) {
+                    continue;
+                }
+                JSONObject object = byTime.computeIfAbsent(time, timestamp -> {
+                    JSONObject row = new JSONObject();
+                    row.put("timestamp", timestamp);
+                    return row;
+                });
+                object.put(field, record.getValue());
             }
-            vo.getList().add(object);
         }
+        vo.getList().addAll(byTime.values());
         return vo;
     }
 

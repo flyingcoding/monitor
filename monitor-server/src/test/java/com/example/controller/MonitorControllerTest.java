@@ -161,6 +161,27 @@ class MonitorControllerTest {
     }
 
     /**
+     * ResponseStatusException 经过全局 advice 后仍必须保留真实 HTTP 状态码，
+     * 不能降级成 HTTP 200 + body.code=400。
+     */
+    @Test
+    void runtimeHistoryInvalidWindowShouldPreserveHttpStatusThroughAdvice() throws Exception {
+        MockMvc mvcWithAdvice = MockMvcBuilders.standaloneSetup(controller)
+                .setControllerAdvice(new ValidationController())
+                .build();
+        Instant now = Instant.now();
+        mvcWithAdvice.perform(get("/api/monitor/runtime_history")
+                        .param("clientId", "42")
+                        .param("from", now.toString())
+                        .param("to", now.minusSeconds(60).toString())
+                        .requestAttr(Const.ATTR_USER_ID, 100)
+                        .requestAttr(Const.ATTR_USER_ROLE, "ROLE_admin"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(400))
+                .andExpect(jsonPath("$.message").value("from 必须早于 to"));
+    }
+
+    /**
      * from == to 也应返回 400（必须严格早于）。
      */
     @Test

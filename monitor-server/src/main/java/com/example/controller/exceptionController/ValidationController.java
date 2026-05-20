@@ -4,6 +4,7 @@ import com.example.entity.RestBean;
 import jakarta.validation.ValidationException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -77,10 +78,11 @@ public class ValidationController {
      * @return 统一响应体
      */
     @ExceptionHandler(ResponseStatusException.class)
-    public RestBean<Void> handleResponseStatusException(ResponseStatusException exception) {
+    public ResponseEntity<RestBean<Void>> handleResponseStatusException(ResponseStatusException exception) {
         int status = exception.getStatusCode().value();
         String message = exception.getReason();
-        return RestBean.failure(status, message == null || message.isBlank() ? "请求失败" : message);
+        RestBean<Void> body = RestBean.failure(status, message == null || message.isBlank() ? "请求失败" : message);
+        return ResponseEntity.status(exception.getStatusCode()).body(body);
     }
 
     /**
