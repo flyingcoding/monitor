@@ -26,7 +26,10 @@ import org.springframework.web.client.RestClientException;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Date;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
 
@@ -45,8 +48,11 @@ import java.util.TreeMap;
  *       这避免重写一份 buffer 路径，并保证切换 provider 时旧缓冲可被重放。</li>
  *   <li><b>查询路径</b>：用 Spring {@link RestClient} 调 VM HTTP API：
  *       <ul>
- *         <li>{@link #readRuntimeHistory}：通过 {@code /api/v1/export} 读取 1h 内
- *             {@code runtime_*} 原始样本，按时间戳合并为 VO 列表；</li>
+ *         <li>{@link #readRuntimeHistory}：通过 {@code /api/v1/export} 读取指定时间范围内
+ *             {@code runtime_*} 原始样本，按时间戳合并为 VO 列表；
+ *             下采样口径由 {@link TsdbQueryUtils#chooseStep} 决定，
+ *             短窗口（≤ 1h）保留原生 10s 采样，长窗口（≤ 7d）按 10min 桶聚合，
+ *             保证返回点数稳定在 1k-2k 区间；</li>
  *         <li>{@link #readAvailabilityBuckets}：用 MetricsQL 扩展函数 {@code present_over_time}
  *             通过 {@code /api/v1/query_range} 返回 48 个 0/1 桶，对应 24h × 30min。</li>
  *       </ul>
@@ -188,14 +194,12 @@ public class VictoriaMetricsProvider implements TimeSeriesAdapter {
     }
 
     @Override
-    public RuntimeHistoryVO readRuntimeHistory(int clientId) {
+    public RuntimeHistoryVO readRuntimeHistory(int clientId, Instant from, Instant to) {
         RuntimeHistoryVO vo = new RuntimeHistoryVO();
-        Instant end = Instant.now();
-        Instant start = end.minusSeconds(3600);
         String selector = String.format("{__name__=~\"%s.*\",clientId=\"%d\"}", METRIC_NAME_PREFIX, clientId);
         String response;
         try {
-            response = this.exportRawSamples(selector, start, end);
+            response = this.exportRawSamples(selector, from, to);
         } catch (RestClientException e) {
             log.warn("VictoriaMetrics readRuntimeHistory 原始样本导出失败 clientId={}: {}", clientId, e.getMessage());
             throw e;
@@ -237,8 +241,66 @@ public class VictoriaMetricsProvider implements TimeSeriesAdapter {
                 row.put(fieldName, rawValue);
             }
         }
-        vo.getList().addAll(byTimestamp.values());
+        // 短窗口（≤ 1h，step=10s）原样返回；长窗口按 TsdbQueryUtils.chooseStep 服务端下采样，
+        // 与 InfluxDB aggregateWindow 口径对齐（mean），保证两个 provider 单次返回点数稳定 ≤ 2k。
+        Duration window = Duration.between(from, to);
+        Duration step = TsdbQueryUtils.chooseStep(window);
+        if (step.equals(TsdbQueryUtils.STEP_10S)) {
+            vo.getList().addAll(byTimestamp.values());
+        } else {
+            vo.getList().addAll(this.downsampleByMean(byTimestamp, step));
+        }
         return vo;
+    }
+
+    /**
+     * 把 VM /api/v1/export 返回的原始样本按 step 时间桶分组并取每桶平均值，
+     * 与 InfluxDB aggregateWindow(fn: mean) 口径对齐。
+     *
+     * <p>排除非数值字段（如 timestamp 自身、字符串型 NaN/Inf）；空桶不输出。
+     *
+     * @param byTimestamp 按时间戳升序的原始行 map
+     * @param step        聚合 step
+     * @return 按 step 起始时间升序的聚合行
+     */
+    private List<JSONObject> downsampleByMean(Map<Long, JSONObject> byTimestamp, Duration step) {
+        long stepMillis = step.toMillis();
+        if (stepMillis <= 0) {
+            return new ArrayList<>(byTimestamp.values());
+        }
+        // bucketStartMillis -> field -> running sum/count
+        Map<Long, Map<String, double[]>> buckets = new TreeMap<>();
+        for (Map.Entry<Long, JSONObject> entry : byTimestamp.entrySet()) {
+            long ts = entry.getKey();
+            long bucketStart = (ts / stepMillis) * stepMillis;
+            Map<String, double[]> agg = buckets.computeIfAbsent(bucketStart, k -> new LinkedHashMap<>());
+            JSONObject row = entry.getValue();
+            for (Map.Entry<String, Object> field : row.entrySet()) {
+                if ("timestamp".equals(field.getKey())) continue;
+                Object value = field.getValue();
+                if (!(value instanceof Number n)) continue;
+                double d = n.doubleValue();
+                if (Double.isNaN(d) || Double.isInfinite(d)) continue;
+                double[] sumCount = agg.computeIfAbsent(field.getKey(), k -> new double[2]);
+                sumCount[0] += d;
+                sumCount[1] += 1;
+            }
+        }
+        List<JSONObject> out = new ArrayList<>(buckets.size());
+        for (Map.Entry<Long, Map<String, double[]>> entry : buckets.entrySet()) {
+            Map<String, double[]> agg = entry.getValue();
+            if (agg.isEmpty()) continue;
+            JSONObject row = new JSONObject();
+            row.put("timestamp", Instant.ofEpochMilli(entry.getKey()));
+            for (Map.Entry<String, double[]> f : agg.entrySet()) {
+                double[] sumCount = f.getValue();
+                if (sumCount[1] > 0) {
+                    row.put(f.getKey(), sumCount[0] / sumCount[1]);
+                }
+            }
+            out.add(row);
+        }
+        return out;
     }
 
     @Override

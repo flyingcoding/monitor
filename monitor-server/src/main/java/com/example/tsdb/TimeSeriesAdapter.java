@@ -3,6 +3,8 @@ package com.example.tsdb;
 import com.example.entity.vo.request.RuntimeDetailVO;
 import com.example.entity.vo.response.RuntimeHistoryVO;
 
+import java.time.Instant;
+
 /**
  * 时序数据库适配层 (v2.0-alpha)。
  *
@@ -44,15 +46,19 @@ public interface TimeSeriesAdapter {
     void writeOtlpMetric(int clientId, RuntimeDetailVO vo);
 
     /**
-     * 查询客户端最近 1 小时运行时历史。
+     * 按时间范围查询客户端运行时历史。
      *
-     * <p>查询失败会以异常向上抛出；上层（{@code ClientServiceImpl.clientRuntimeDetailsHistory}）
+     * <p>实现按 {@link TsdbQueryUtils#chooseStep(java.time.Duration)} 选择服务端聚合 step，
+     * 使返回点数稳定在 1k-2k 区间（详见 PRD §D4）；前端图表无需感知 provider 切换。
+     * 查询失败会以异常向上抛出；上层（{@code ClientServiceImpl.clientRuntimeDetailsHistory}）
      * 决定降级策略。
      *
      * @param clientId 客户端 ID
+     * @param from     查询起始时间（含），不允许为 {@code null}
+     * @param to       查询截止时间（含），不允许为 {@code null}，且必须晚于 {@code from}
      * @return 历史运行时序列；无数据时返回字段填充为空集合的 VO，不返回 {@code null}
      */
-    RuntimeHistoryVO readRuntimeHistory(int clientId);
+    RuntimeHistoryVO readRuntimeHistory(int clientId, Instant from, Instant to);
 
     /**
      * 查询客户端 24 小时按 30 分钟切分的可用率桶。

@@ -6,6 +6,7 @@ import com.example.entity.dto.ClientSsh;
 import com.example.entity.vo.request.*;
 import com.example.entity.vo.response.*;
 
+import java.time.Instant;
 import java.util.List;
 
 /**
@@ -28,7 +29,20 @@ public interface ClientService extends IService<Client>{
     void renameClient(RenameClientVO vo);
     ClientDetailsVO clientDetails(int clientId);
     void renameNode(RenameNodeVO vo);
-    RuntimeHistoryVO clientRuntimeDetailsHistory(int clientId);
+    /**
+     * 按时间范围查询客户端运行时历史。
+     *
+     * <p>底层通过 {@code TimeSeriesAdapter.readRuntimeHistory(int, Instant, Instant)}
+     * 调当前生效 provider，server 端按 {@code TsdbQueryUtils.chooseStep} 下采样，
+     * 保证 1k-2k 点的稳定返回。同时附加 {@code ClientDetail} 静态字段（disk/memory 总量）
+     * 用于前端图表显示。
+     *
+     * @param clientId 客户端 ID
+     * @param from     查询起始时间（含）
+     * @param to       查询截止时间（含），必须晚于 {@code from}
+     * @return 历史运行时数据；无数据时返回字段填充为空集合的 VO
+     */
+    RuntimeHistoryVO clientRuntimeDetailsHistory(int clientId, Instant from, Instant to);
     RuntimeDetailVO clientRuntimeDetailsNow(int clientId);
     void deleteClient(int clientId);
     void saveSshConnection(SshConnectVO vo);

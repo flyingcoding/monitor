@@ -120,7 +120,7 @@ class StatusPageServiceImplTest {
             }
 
             @Override
-            public RuntimeHistoryVO readRuntimeHistory(int clientId) {
+            public RuntimeHistoryVO readRuntimeHistory(int clientId, java.time.Instant from, java.time.Instant to) {
                 return new RuntimeHistoryVO();
             }
 

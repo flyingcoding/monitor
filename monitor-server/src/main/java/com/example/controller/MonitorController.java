@@ -23,6 +23,8 @@ import com.example.service.SystemdSnapshotService;
 import com.example.utils.Const;
 import jakarta.annotation.Resource;
 import jakarta.validation.Valid;
+import org.springframework.format.annotation.DateTimeFormat;
+import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestAttribute;
@@ -30,7 +32,10 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.server.ResponseStatusException;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 
 /**
@@ -142,22 +147,46 @@ public class MonitorController {
             return RestBean.noPermission();
     }
 
+    /** 历史查询时间窗口硬上限：7 天（PRD §D2）。 */
+    private static final Duration MAX_HISTORY_WINDOW = Duration.ofDays(7);
+
+    /** 缺省查询窗口：1 小时（v2.0-beta 之前的默认行为，无 from/to 入参时兼容）。 */
+    private static final Duration DEFAULT_HISTORY_WINDOW = Duration.ofHours(1);
+
     /**
-     * 查询客户端历史运行时数据。
+     * 查询客户端历史运行时数据，支持按时间范围查询。
+     *
+     * <p>无 from/to 入参时默认查询最近 1 小时（v2.0-beta 之前行为）；带 from/to 时按指定范围查询。
+     * 时间跨度硬上限 7 天（详见 PRD §D2），超过则返回 400；from 必须早于 to。
+     * server 端按 {@code TsdbQueryUtils.chooseStep} 选择 step 下采样，返回 1k-2k 点。
      *
      * @param clientId 客户端ID
-     * @param userId 当前用户ID
+     * @param from     可选起始时间（ISO 8601），缺省 {@code to - 1h}
+     * @param to       可选截止时间（ISO 8601），缺省 {@code now}
+     * @param userId   当前用户ID
      * @param userRole 当前用户角色
      * @return 历史运行时数据
      */
     @GetMapping("/runtime_history")
     public RestBean<RuntimeHistoryVO> runtimeDetailsHistory(@RequestParam int clientId,
+                                                            @RequestParam(required = false)
+                                                            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant from,
+                                                            @RequestParam(required = false)
+                                                            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant to,
                                                             @RequestAttribute(Const.ATTR_USER_ID) int userId,
                                                             @RequestAttribute(Const.ATTR_USER_ROLE) String userRole) {
-        if (permissionService.canAccessClient(userId, userRole, clientId)) {
-            return RestBean.success(clientService.clientRuntimeDetailsHistory(clientId));
-        } else
+        if (!permissionService.canAccessClient(userId, userRole, clientId)) {
             return RestBean.noPermission();
+        }
+        Instant effectiveTo = to == null ? Instant.now() : to;
+        Instant effectiveFrom = from == null ? effectiveTo.minus(DEFAULT_HISTORY_WINDOW) : from;
+        if (!effectiveFrom.isBefore(effectiveTo)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "from 必须早于 to");
+        }
+        if (Duration.between(effectiveFrom, effectiveTo).compareTo(MAX_HISTORY_WINDOW) > 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "时间跨度不能超过 7 天");
+        }
+        return RestBean.success(clientService.clientRuntimeDetailsHistory(clientId, effectiveFrom, effectiveTo));
     }
 
     /**

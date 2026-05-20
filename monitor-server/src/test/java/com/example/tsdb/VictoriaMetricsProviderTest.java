@@ -129,7 +129,7 @@ class VictoriaMetricsProviderTest {
                         .withStatus(200)
                         .withHeader("Content-Type", "application/json")
                         .withBody("")));
-        com.example.entity.vo.response.RuntimeHistoryVO vo = provider.readRuntimeHistory(1);
+        com.example.entity.vo.response.RuntimeHistoryVO vo = provider.readRuntimeHistory(1, hourAgo(), now());
         Assertions.assertNotNull(vo);
         Assertions.assertTrue(vo.getList().isEmpty(), "空 export 应返回空 list");
     }
@@ -146,7 +146,7 @@ class VictoriaMetricsProviderTest {
                         .withHeader("Content-Type", "application/json")
                         .withBody(json)));
 
-        com.example.entity.vo.response.RuntimeHistoryVO vo = provider.readRuntimeHistory(42);
+        com.example.entity.vo.response.RuntimeHistoryVO vo = provider.readRuntimeHistory(42, hourAgo(), now());
         Assertions.assertEquals(2, vo.getList().size(), "两个时间戳应合并为 2 行");
         com.alibaba.fastjson2.JSONObject first = vo.getList().get(0);
         Assertions.assertNotNull(first.get("timestamp"), "每行必须含 timestamp");
@@ -169,7 +169,7 @@ class VictoriaMetricsProviderTest {
                 .willReturn(aResponse().withStatus(200)
                         .withHeader("Content-Type", "application/json")
                         .withBody(json)));
-        com.example.entity.vo.response.RuntimeHistoryVO vo = provider.readRuntimeHistory(42);
+        com.example.entity.vo.response.RuntimeHistoryVO vo = provider.readRuntimeHistory(42, hourAgo(), now());
         Assertions.assertEquals(2, vo.getList().size(), "同 series 多行 export 仍应保留所有原始时间点");
         Assertions.assertEquals(0.42, ((Number) vo.getList().get(0).get("cpuUsage")).doubleValue(), 1e-9);
         Assertions.assertEquals(0.55, ((Number) vo.getList().get(1).get("cpuUsage")).doubleValue(), 1e-9);
@@ -187,10 +187,76 @@ class VictoriaMetricsProviderTest {
                         .withHeader("Content-Type", "application/json")
                         .withBody(json)));
 
-        com.example.entity.vo.response.RuntimeHistoryVO vo = provider.readRuntimeHistory(42);
+        com.example.entity.vo.response.RuntimeHistoryVO vo = provider.readRuntimeHistory(42, hourAgo(), now());
         Assertions.assertEquals(1, vo.getList().size(), "只有 runtime_* series 被计入");
         Assertions.assertNull(vo.getList().get(0).get("other_metric"), "非 runtime_ 命名必须被过滤");
         Assertions.assertNotNull(vo.getList().get(0).get("cpuUsage"));
+    }
+
+    @Test
+    void readRuntimeHistoryShouldPassFromAndToAsExportStartEndParams() {
+        // 验证 PR1：from / to 必须按 epoch seconds 写入 export 的 start / end 表单字段
+        wireMock.stubFor(post(urlPathEqualTo("/api/v1/export"))
+                .willReturn(aResponse().withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("")));
+        Instant from = Instant.ofEpochSecond(1_700_000_000L);
+        Instant to = Instant.ofEpochSecond(1_700_003_600L); // 1h 后
+        provider.readRuntimeHistory(42, from, to);
+        wireMock.verify(postRequestedFor(urlPathEqualTo("/api/v1/export"))
+                .withRequestBody(containing("start=1700000000"))
+                .withRequestBody(containing("end=1700003600")));
+    }
+
+    @Test
+    void readRuntimeHistoryShouldDownsampleLongWindowToBoundedPoints() {
+        // 模拟 6h 窗口（step=30s）：构造 ~720 个 10s 原始样本，期望按 30s 桶聚合到 ~240 个。
+        // 取每桶平均值口径与 InfluxDB aggregateWindow(fn: mean) 对齐。
+        long startMs = 1_700_000_000_000L;
+        StringBuilder values = new StringBuilder("[");
+        StringBuilder timestamps = new StringBuilder("[");
+        int rawPoints = 720;
+        for (int i = 0; i < rawPoints; i++) {
+            if (i > 0) {
+                values.append(",");
+                timestamps.append(",");
+            }
+            values.append(i % 30); // 每 30 个点周期性变化，方便算预期均值
+            timestamps.append(startMs + i * 10_000L);
+        }
+        values.append("]");
+        timestamps.append("]");
+        String json = "{\"metric\":{\"__name__\":\"runtime_cpuUsage\",\"clientId\":\"42\"},\"values\":"
+                + values + ",\"timestamps\":" + timestamps + "}\n";
+        wireMock.stubFor(post(urlPathEqualTo("/api/v1/export"))
+                .willReturn(aResponse().withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody(json)));
+
+        Instant from = Instant.ofEpochSecond(1_700_000_000L);
+        Instant to = from.plusSeconds(6 * 3600); // 6h → step=30s
+        com.example.entity.vo.response.RuntimeHistoryVO vo = provider.readRuntimeHistory(42, from, to);
+        // 6h × 720 raw / 3 raw-per-30s-bucket = 240 bucket
+        Assertions.assertTrue(vo.getList().size() <= 250 && vo.getList().size() >= 230,
+                "6h 窗口经 30s 桶下采样后点数应约为 240，实际 " + vo.getList().size());
+    }
+
+    @Test
+    void readRuntimeHistoryShouldKeepNativeResolutionForOneHourWindow() {
+        // 1h 窗口（step=10s）等于原生分辨率：原始点应原样返回，不再二次聚合
+        String json = """
+                {"metric":{"__name__":"runtime_cpuUsage","clientId":"42"},"values":[0.42,0.55],"timestamps":[1700000000000,1700000010000]}
+                """;
+        wireMock.stubFor(post(urlPathEqualTo("/api/v1/export"))
+                .willReturn(aResponse().withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody(json)));
+        Instant from = Instant.ofEpochSecond(1_700_000_000L);
+        Instant to = from.plusSeconds(3600); // 1h → step=10s
+        com.example.entity.vo.response.RuntimeHistoryVO vo = provider.readRuntimeHistory(42, from, to);
+        Assertions.assertEquals(2, vo.getList().size(), "1h 窗口应保留所有原始点");
+        Assertions.assertEquals(0.42, ((Number) vo.getList().get(0).get("cpuUsage")).doubleValue(), 1e-9);
+        Assertions.assertEquals(0.55, ((Number) vo.getList().get(1).get("cpuUsage")).doubleValue(), 1e-9);
     }
 
     @Test
@@ -307,5 +373,15 @@ class VictoriaMetricsProviderTest {
         ReflectionTestUtils.setField(vo, "diskRead", 1.0);
         ReflectionTestUtils.setField(vo, "diskWrite", 2.0);
         return vo;
+    }
+
+    /** 构造常用查询 from：当前时间 - 1h，对应原 v2.0-beta 默认 1h 行为。 */
+    private static Instant hourAgo() {
+        return Instant.now().minusSeconds(3600);
+    }
+
+    /** 构造常用查询 to：当前时间。 */
+    private static Instant now() {
+        return Instant.now();
     }
 }

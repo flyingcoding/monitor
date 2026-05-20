@@ -28,6 +28,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Comparator;
 import java.util.Date;
@@ -53,8 +54,9 @@ import java.util.concurrent.locks.ReentrantLock;
  * </ul>
  *
  * <h3>读取路径</h3>
- * <p>{@link #readRuntimeHistory} 和 {@link #readAvailabilityBuckets} 直接调 Flux Query；
- * 异常向上抛出由调用方决定降级（{@code StatusPageServiceImpl.computeSummary} 会兜底）。
+ * <p>{@link #readRuntimeHistory} 按时间范围调 Flux Query，server 端 aggregateWindow 下采样
+ * （step 由 {@link TsdbQueryUtils#chooseStep} 选择）；{@link #readAvailabilityBuckets} 直接调 Flux Query
+ * 计 24h × 30min 桶。两个读路径异常向上抛出由调用方决定降级（{@code StatusPageServiceImpl.computeSummary} 会兜底）。
  *
  * <h3>配置兼容（v2.0-beta）</h3>
  * <ul>
@@ -210,15 +212,18 @@ public class InfluxDbProvider implements TimeSeriesAdapter {
     }
 
     @Override
-    public RuntimeHistoryVO readRuntimeHistory(int clientId) {
+    public RuntimeHistoryVO readRuntimeHistory(int clientId, Instant from, Instant to) {
         RuntimeHistoryVO vo = new RuntimeHistoryVO();
+        Duration window = Duration.between(from, to);
+        Duration step = TsdbQueryUtils.chooseStep(window);
         String query = """
                 from(bucket: "%s")
-                |> range(start: %s)
+                |> range(start: %s, stop: %s)
                 |> filter(fn: (r) => r["_measurement"] == "runtime")
                 |> filter(fn: (r) => r["clientId"] == "%s")
+                |> aggregateWindow(every: %ds, fn: mean, createEmpty: false)
                 """;
-        String format = String.format(query, bucket, "-1h", clientId);
+        String format = String.format(query, bucket, from.toString(), to.toString(), clientId, step.toSeconds());
         List<FluxTable> tables = client.getQueryApi().query(format, organization);
         int size = tables.size();
         if (size == 0) return vo;

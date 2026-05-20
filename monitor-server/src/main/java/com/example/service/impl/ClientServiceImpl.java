@@ -26,6 +26,7 @@ import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 
 import java.security.SecureRandom;
+import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
@@ -233,14 +234,16 @@ public class ClientServiceImpl extends ServiceImpl<ClientMapper, Client> impleme
     }
 
     /**
-     * 查询指定客户端历史运行时数据并附加基础硬件信息。
+     * 按时间范围查询客户端历史运行时数据并附加基础硬件信息。
      *
      * @param clientId 客户端ID
+     * @param from     查询起始时间（含）
+     * @param to       查询截止时间（含）
      * @return 运行时历史数据
      */
     @Override
-    public RuntimeHistoryVO clientRuntimeDetailsHistory(int clientId) {
-        RuntimeHistoryVO vo = influx.readRuntimeHistory(clientId);
+    public RuntimeHistoryVO clientRuntimeDetailsHistory(int clientId, Instant from, Instant to) {
+        RuntimeHistoryVO vo = influx.readRuntimeHistory(clientId, from, to);
         ClientDetail detail = clientDetailMapper.selectById(clientId);
         if (detail != null) {
             BeanUtils.copyProperties(detail, vo);

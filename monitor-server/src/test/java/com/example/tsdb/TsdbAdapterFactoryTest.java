@@ -98,7 +98,7 @@ class TsdbAdapterFactoryTest {
         Assertions.assertDoesNotThrow(() -> {
             Class<?> cls = adapter.getClass();
             cls.getMethod("writeRuntime", int.class, RuntimeDetailVO.class);
-            cls.getMethod("readRuntimeHistory", int.class);
+            cls.getMethod("readRuntimeHistory", int.class, java.time.Instant.class, java.time.Instant.class);
         }, "TimeSeriesAdapter 接口方法签名必须在 InfluxDbProvider 上可见");
         Assertions.assertNotNull(RuntimeHistoryVO.class);
     }
