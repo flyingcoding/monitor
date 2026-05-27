@@ -29,19 +29,24 @@ public final class GreenMailSupport {
     }
 
     /**
-     * 构建带默认登录凭证的 GreenMailExtension。withPerMethodLifecycle(false) 让 SMTP server
+     * 构建无认证 SMTP 的 GreenMailExtension。withPerMethodLifecycle(false) 让 SMTP server
      * 在整个测试类生命周期内只启一次，避免每个 @Test 重启 GreenMail（端口绑定 race condition）。
      *
-     * <p>PR3 hotfix（CI run 26528116716）：加 {@code withDisabledAuthentication()} 让 GreenMail
-     * 接受任意 AUTH 凭证，绕过 JavaMailSender vs GreenMail AUTH LOGIN 协商对齐的潜在问题
-     * （之前 60s 内邮件没到，怀疑是 AUTH 校验 silently 拒收）。
-     * 同时保留 {@code withUser} 预创建 {@code test@example.com}（依赖默认 MessageDeliveryHandler
-     * 自动创建未知收件人 mailbox，{@code alerts@example.com} 也能被投递）。
+     * <p>PR3 hotfix（CI run 26528822233 → 26528822233 后再调整）：
+     * <ul>
+     *   <li>{@code withDisabledAuthentication()}：GreenMail 不强制要求 AUTH 校验，任何 SMTP
+     *       连接（含未 AUTH 的）都可发邮件。修复上一轮 535 Authentication credentials invalid。</li>
+     *   <li>不再 {@code withUser(...)} 预创建用户——预创建用户会启用 AUTH 校验，与
+     *       {@code withDisabledAuthentication()} 矛盾。GreenMail 默认 MessageDeliveryHandler
+     *       会按收件人地址自动创建 mailbox，{@code test@example.com} / {@code alerts@example.com}
+     *       等均自动建库，{@code getReceivedMessages()} 仍可读出。</li>
+     * </ul>
+     * <p>同时 {@code application-it.yml} 显式配置 {@code mail.smtp.auth=false} 让 JavaMailSender
+     * 不主动发 AUTH，双向都 bypass 认证流程。
      */
     public static GreenMailExtension smtpExtension() {
         return new GreenMailExtension(ServerSetupTest.SMTP)
                 .withConfiguration(GreenMailConfiguration.aConfig()
-                        .withUser(DEFAULT_USERNAME, DEFAULT_PASSWORD)
                         .withDisabledAuthentication())
                 .withPerMethodLifecycle(false);
     }
