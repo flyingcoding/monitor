@@ -159,7 +159,16 @@ class AlertFlowIT extends IntegrationTestBase {
                 });
 
         // 2) GreenMail 应收到一封中文 HTML 邮件（RabbitMQ 消费 → MailNotificationChannel → SMTP）
-        await().atMost(Duration.ofSeconds(20))
+        //
+        // PR3 hotfix（CI run 26526766367）：上一轮 20s 超时不够。原因链路太长：
+        //   AlertEvaluator(@Async) → rabbitTemplate.convertAndSend → RabbitMQ broker →
+        //   NotificationQueueListener.handleAlertEvent → MailNotificationChannel.send →
+        //   JavaMailSender → SMTP localhost:3025 → GreenMail。
+        // CI 上每跳都有 1-3s 抖动，第一封邮件还要付 JavaMail SDK / SMTPSession 冷启动开销。
+        // 同时如果 RabbitMQ broker 在 @DirtiesContext(BEFORE_CLASS) 重建 Spring 后未及时把
+        // listener 重连上 notification 队列，第一条 AlertEvent 会停在队列里直到消费者重连。
+        // 给到 60s 让 worst-case 也能跑完；如果还超时再回头查 RabbitMQ notification.dlq 定位。
+        await().atMost(Duration.ofSeconds(60))
                 .pollInterval(Duration.ofMillis(500))
                 .untilAsserted(() -> {
                     MimeMessage[] received = SMTP.getReceivedMessages();
