@@ -48,12 +48,12 @@ public class OidcBindingIntentServiceImpl implements OidcBindingIntentService {
     private final SecureRandom random = new SecureRandom();
 
     @Resource
-    private StringRedisTemplate redisTemplate;
+    private StringRedisTemplate stringRedisTemplate;
 
     @Override
     public String issue(int accountId) {
         String token = generateToken();
-        redisTemplate.opsForValue().set(KEY_PREFIX + token,
+        stringRedisTemplate.opsForValue().set(KEY_PREFIX + token,
                 String.valueOf(accountId),
                 TTL_MINUTES, TimeUnit.MINUTES);
         log.info("OIDC binding intent issued accountId={}", accountId);
@@ -66,12 +66,12 @@ public class OidcBindingIntentServiceImpl implements OidcBindingIntentService {
             return Optional.empty();
         }
         String key = KEY_PREFIX + intentToken;
-        String raw = redisTemplate.opsForValue().get(key);
+        String raw = stringRedisTemplate.opsForValue().get(key);
         if (raw == null) {
             return Optional.empty();
         }
         // 立即删除，防止并发重复消费
-        Boolean deleted = redisTemplate.delete(key);
+        Boolean deleted = stringRedisTemplate.delete(key);
         if (Boolean.FALSE.equals(deleted)) {
             // 已被其他线程消费
             log.warn("OIDC binding intent token race: consumed by another thread");
