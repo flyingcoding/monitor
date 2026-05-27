@@ -14,8 +14,6 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
 
-import java.util.Map;
-
 /**
  * v2.0-tests 集成测试基类：单例 Testcontainers + Spring Boot {@code @ServiceConnection} 自动装配。
  *
@@ -47,12 +45,13 @@ import java.util.Map;
 public abstract class IntegrationTestBase {
 
     /**
-     * MySQL 容器：使用 tmpfs 挂载 {@code /var/lib/mysql} 让数据文件全部驻留内存——
-     * GitHub Actions ubuntu-latest 默认 docker daemon 在 7GB RAM 上跑 4 个容器 + Spring Boot + Maven JVM
-     * 时容易因 IO 抖动让 MySQL 健康检查超时被 OOM-killed，进而让后续 IT 的 HikariCP 连接 30s 超时。
+     * MySQL 容器：JUnit5 {@code @Testcontainers} 在 JVM 内通过 {@code static final} 字段把容器
+     * 跨测试类共享，但 Spring TestContext 即使被复用，HikariCP 连接池仍可能在 IT 之间出现
+     * 抖动（GitHub Actions docker daemon 高负载时 MySQL 进程偶有 OOM）。
      * <p>
-     * tmpfs 不持久化（与 IT 数据生命周期"测试方法粒度"语义一致），同时显著降 IO，验证为 PR2 hotfix 的
-     * SmokeIT Connection refused 的可能根因之一。
+     * 调试 tmpfs 挂载方案后已验证它会 <b>增加</b> 单进程内存压力（数据全驻留内存）→ 反加重 OOM，
+     * 故不引入 {@code withTmpFs}。后续若仍遇连接抖动，先打 {@code MYSQL.isRunning()} 诊断，再决定
+     * 是否引入 {@code @DirtiesContext} 或 {@code mysqld --max-connections} 等手段。
      */
     @Container
     @ServiceConnection
@@ -60,7 +59,6 @@ public abstract class IntegrationTestBase {
             .withDatabaseName("monitor")
             .withUsername("test")
             .withPassword("test")
-            .withTmpFs(Map.of("/var/lib/mysql", "rw"))
             .withReuse(true);
 
     @Container
