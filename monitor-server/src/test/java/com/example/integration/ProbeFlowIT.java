@@ -95,6 +95,9 @@ class ProbeFlowIT extends IntegrationTestBase {
     private ProbeService probeService;
 
     @Autowired
+    private org.springframework.data.redis.core.StringRedisTemplate stringRedisTemplate;
+
+    @Autowired
     private org.springframework.amqp.rabbit.listener.RabbitListenerEndpointRegistry listenerRegistry;
 
     @Autowired
@@ -113,7 +116,10 @@ class ProbeFlowIT extends IntegrationTestBase {
     @BeforeEach
     void resetState() {
         probeScheduler.clearStateForTest();
-        jwt = AdminLoginSupport.resetAndLogin(jdbcTemplate, passwordEncoder, restTemplate, baseUrl());
+        // PR3 hotfix：StringRedisTemplate 重载会在登录前 DEL jwt:frequency:1，避免 CI 连续 @BeforeEach
+        // 命中 limitOnceUpgradeCheck 拒绝（"登录验证频繁，请稍后再试"）
+        jwt = AdminLoginSupport.resetAndLogin(jdbcTemplate, passwordEncoder, stringRedisTemplate,
+                restTemplate, baseUrl());
         // 排空 notification 队列残留（上一个 @Test 已 stop listener 后留下的、或者其他 IT 顺带产生的消息）
         drainNotificationQueue();
     }

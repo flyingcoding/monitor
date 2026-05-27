@@ -84,6 +84,9 @@ class ClientRuntimeIT extends IntegrationTestBase {
     @Autowired
     private PasswordEncoder passwordEncoder;
 
+    @Autowired
+    private org.springframework.data.redis.core.StringRedisTemplate stringRedisTemplate;
+
     /**
      * 每个测试方法前：
      * <ol>
@@ -375,8 +378,11 @@ class ClientRuntimeIT extends IntegrationTestBase {
      *
      * <p>调用前需在 {@code @BeforeEach} 已经 reset 过 admin 密码；本类的
      * {@link #resetIntegrationState()} 已经接管这一步。
+     *
+     * <p>PR3 hotfix：登录前主动 DEL jwt:frequency:1 兜底，避免 CI 连续 IT 跑命中频率限流。
      */
     private String loginAsAdmin() {
+        AdminLoginSupport.clearLoginFrequencyLimit(stringRedisTemplate);
         return AdminLoginSupport.loginAsAdmin(restTemplate, baseUrl());
     }
 }

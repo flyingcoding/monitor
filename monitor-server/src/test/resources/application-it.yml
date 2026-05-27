@@ -19,10 +19,17 @@ spring:
     jwt:
       key: it-jwt-secret
       expire: 72
+      # PR3 hotfix：集成测试的 @BeforeEach 在数秒内反复触发 /api/auth/login → JwtUtils#createJwt
+      # → FlowUtils#limitOnceUpgradeCheck。production 默认 base=10s 意味着「同 user 10s 内仅允许 1 次
+      # 生成 JWT」，CI 跑 4 个 IT 类 × N 个 @Test 时第 2+ 次登录立刻拿到 RestBean.code=403
+      # ({"message":"登录验证频繁，请稍后再试"}) → 全部 AdminLoginSupport 断言炸。
+      # 集成测试要的是冒烟，不需要真实限流；把 base/upgrade 调到 1s/2s + frequency 调到 10000
+      # 让 Redis 计数 TTL 极短 + 阈值不可能触发 upgrade-block。同时 AdminLoginSupport 在登录前
+      # 主动 DELETE jwt:frequency:1 兜底（belt-and-suspenders）。
       limit:
-        base: 10
-        upgrade: 300
-        frequency: 30
+        base: 1
+        upgrade: 2
+        frequency: 10000
     filter:
       order: -100
   web:

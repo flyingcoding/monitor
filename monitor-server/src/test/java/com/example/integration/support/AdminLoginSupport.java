@@ -4,6 +4,7 @@ import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONObject;
 import org.junit.jupiter.api.Assertions;
 import org.springframework.boot.test.web.client.TestRestTemplate;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
@@ -35,6 +36,20 @@ public final class AdminLoginSupport {
      */
     public static final String KNOWN_ADMIN_PASSWORD = "monitor-it-admin-123";
 
+    /**
+     * Flyway V1 预置 admin 行的 id，{@code account.id = 1}；用作 Redis 频率限流 key
+     * （{@code jwt:frequency:1}）。集成测试期间 admin 的 id 在 cleanup-after-test.sql 显式 INSERT
+     * 为 1，故 hardcode 安全。
+     */
+    private static final int ADMIN_USER_ID = 1;
+
+    /**
+     * {@link com.example.utils.JwtUtils#frequencyCheck} 使用的 Redis key 前缀，与
+     * {@link com.example.utils.Const#JWT_FREQUENCY} 同步。复制常量字符串避免测试包 import 主代码 utils
+     * （维持单向依赖：测试 → 主代码 entity / config，不反过来）。
+     */
+    private static final String JWT_FREQUENCY_KEY_PREFIX = "jwt:frequency:";
+
     private AdminLoginSupport() {
     }
 
@@ -56,12 +71,62 @@ public final class AdminLoginSupport {
     }
 
     /**
+     * 清掉 {@code jwt:frequency:1} Redis key，让下一次 {@code createJwt} 不会因频率限流被拒。
+     *
+     * <p>PR3 hotfix 背景：production yml 默认 {@code base=10s + frequency=30}，意味着同一 userId 在
+     * 10 秒内做超过 30 次 createJwt 才会触发 upgrade-block。但 {@link com.example.utils.FlowUtils#internalCheck}
+     * 的实现细节是：key 首次创建时返回 true（放行），key 已存在但未越过 frequency 阈值时也调用 action.run(false)
+     * 返回 false（拒绝）—— 因 {@code limitOnceUpgradeCheck} 的 action 永远返回 false。结果是「同一 userId
+     * 在 base TTL 内」仅允许首次登录，第 2+ 次都被拒。集成测试在 @BeforeEach 反复登录命中这条规则。
+     *
+     * <p>{@code application-it.yml} 已把 base 调到 1s 让 TTL 极短，但 CI runner 偶发卡顿 + 多个 IT
+     * 类连跑仍可能踩坑。此处显式 DELETE Redis key 是兜底，保证「测试前的状态」绝对干净。
+     */
+    public static void clearLoginFrequencyLimit(StringRedisTemplate redisTemplate) {
+        redisTemplate.delete(JWT_FREQUENCY_KEY_PREFIX + ADMIN_USER_ID);
+    }
+
+    /**
      * 重置 admin 密码并做表单登录，返回 JWT 字符串。一站式调用方便测试方法在 {@code @BeforeEach}
      * 之外按需登录。
      *
      * <p>{@code POST /api/auth/login} 接受 {@code application/x-www-form-urlencoded}（Spring
      * Security formLogin 默认），登录成功返回 {@code RestBean<AuthorizeVO>}，其中
      * {@code data.token} 为前端持久化的 JWT bearer。
+     *
+     * <p>PR3 hotfix：本重载内部调用 {@link #clearLoginFrequencyLimit(StringRedisTemplate)}
+     * 在登录前清掉 Redis 频率 key，避免连续测试触发 {@code 登录验证频繁，请稍后再试} 误判。
+     * 老调用方（如未注入 StringRedisTemplate 的早期 IT）可以继续走 {@link #resetAndLogin(JdbcTemplate, PasswordEncoder, TestRestTemplate, String)}
+     * 重载（无 Redis 清理，依赖 application-it.yml base=1s TTL 兜底）。
+     *
+     * @param jdbcTemplate   JDBC 模板
+     * @param encoder        Spring Security PasswordEncoder
+     * @param redisTemplate  StringRedisTemplate，用于 DEL jwt:frequency:1 兜底
+     * @param restTemplate   Spring Boot 测试 HTTP 客户端
+     * @param baseUrl        被测服务的 baseUrl（如 {@code http://localhost:53210}）
+     * @return JWT bearer 字符串（仅 token 字段，无 {@code Bearer } 前缀）
+     */
+    public static String resetAndLogin(JdbcTemplate jdbcTemplate,
+                                       PasswordEncoder encoder,
+                                       StringRedisTemplate redisTemplate,
+                                       TestRestTemplate restTemplate,
+                                       String baseUrl) {
+        resetAdminPassword(jdbcTemplate, encoder);
+        clearLoginFrequencyLimit(redisTemplate);
+        return loginAsAdmin(restTemplate, baseUrl);
+    }
+
+    /**
+     * 重置 admin 密码并做表单登录，返回 JWT 字符串。一站式调用方便测试方法在 {@code @BeforeEach}
+     * 之外按需登录。
+     *
+     * <p>{@code POST /api/auth/login} 接受 {@code application/x-www-form-urlencoded}（Spring
+     * Security formLogin 默认），登录成功返回 {@code RestBean<AuthorizeVO>}，其中
+     * {@code data.token} 为前端持久化的 JWT bearer。
+     *
+     * <p>本重载不清理 Redis 频率 key，仅依赖 {@code application-it.yml} 的 {@code limit.base=1s}
+     * TTL 兜底；推荐新调用方使用 {@link #resetAndLogin(JdbcTemplate, PasswordEncoder, StringRedisTemplate, TestRestTemplate, String)}
+     * 重载主动清理 Redis key，避免 CI 卡顿期间偶发 403。
      *
      * @param jdbcTemplate JDBC 模板
      * @param encoder      Spring Security PasswordEncoder

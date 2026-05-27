@@ -1,7 +1,10 @@
 package com.example.integration;
 
+import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.BeforeAll;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -13,6 +16,11 @@ import org.testcontainers.containers.RabbitMQContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
+
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.SQLException;
+import java.sql.Statement;
 
 /**
  * v2.0-tests 集成测试基类：单例 Testcontainers + Spring Boot {@code @ServiceConnection} 自动装配。
@@ -31,6 +39,26 @@ import org.testcontainers.utility.DockerImageName;
  * 类级 {@code @Sql(executionPhase = AFTER_TEST_METHOD)} 让每个 {@code @Test} 收尾跑
  * {@code cleanup-after-test.sql}：TRUNCATE 业务表 + 复刻 Flyway V1 预置 admin 行。D4 决策：测试数据
  * 在测试代码里 INSERT，不引入 V99__test_seed.sql。
+ *
+ * <h3>PR3 hotfix：MySQL OOM 防御</h3>
+ * <p>CI runner（GitHub Actions ubuntu-latest，7GB RAM）跑 4 个 Testcontainers + Spring Boot
+ * + Maven 时容易把 MySQL 容器 OOM killed。docker 进程 kill 了 mysqld 后 Testcontainers 的
+ * {@link MySQLContainer#isRunning()} 返回缓存的 "started" 状态（不去 ping Docker），所以静态字段
+ * 还 "alive"，但实际 mysqld 已死 → Hikari pool 在 @BeforeEach 拿连接 60s 后 timeout。
+ * 全套 ProbeFlowIT 5 @Test × 60s = 5min 卡死的元凶。
+ *
+ * <p>两层防御：
+ * <ol>
+ *   <li><b>压低 MySQL 内存占用</b>：{@code .withCommand(--innodb-buffer-pool-size=64M, --max-connections=20,
+ *       --innodb-flush-method=O_DIRECT_NO_FSYNC)} 让 MySQL 默认 ~128MB buffer pool 砍半 + max-connections
+ *       从 151 降到 20（每个连接 thread 内存巨大），并放宽 fsync 压力。从源头降低 OOM 概率。</li>
+ *   <li><b>{@link DirtiesContext}({@code BEFORE_CLASS})</b>：所有 IT 共享 fail-fast 隔离——每个 IT 类
+ *       拿独立 Spring TestContext + 全新 HikariCP 池。容器实例不变（{@code static final} reuse），但
+ *       Spring 重建 DataSource 避免上一个 IT 留下的死连接污染下一个 IT。</li>
+ *   <li><b>{@link #verifyContainerConnectivity()} @BeforeAll</b>：每个 IT 类启动时主动 JDBC 直连 ping
+ *       MySQL，绕开 Spring 的 HikariCP 池。若 MySQL 真死了，断言立刻失败（< 5s）而不是等 Hikari 60s 超时；
+ *       便于在 CI 日志中区分"容器死"与"Hikari 状态死"。</li>
+ * </ol>
  */
 @Testcontainers(disabledWithoutDocker = true)
 @SpringBootTest(
@@ -41,6 +69,7 @@ import org.testcontainers.utility.DockerImageName;
         properties = "management.health.mail.enabled=false"
 )
 @ActiveProfiles("it")
+@DirtiesContext(classMode = DirtiesContext.ClassMode.BEFORE_CLASS)
 @Sql(scripts = "/cleanup-after-test.sql", executionPhase = Sql.ExecutionPhase.AFTER_TEST_METHOD)
 public abstract class IntegrationTestBase {
 
@@ -50,8 +79,16 @@ public abstract class IntegrationTestBase {
      * 抖动（GitHub Actions docker daemon 高负载时 MySQL 进程偶有 OOM）。
      * <p>
      * 调试 tmpfs 挂载方案后已验证它会 <b>增加</b> 单进程内存压力（数据全驻留内存）→ 反加重 OOM，
-     * 故不引入 {@code withTmpFs}。后续若仍遇连接抖动，先打 {@code MYSQL.isRunning()} 诊断，再决定
-     * 是否引入 {@code @DirtiesContext} 或 {@code mysqld --max-connections} 等手段。
+     * 故不引入 {@code withTmpFs}。
+     * <p>
+     * <b>PR3 hotfix</b>：{@code withCommand} 限制 mysqld 内存：
+     * <ul>
+     *   <li>{@code --innodb-buffer-pool-size=64M}：默认 128M，砍半省一半驻留内存。</li>
+     *   <li>{@code --max-connections=20}：默认 151，每个 connection thread 占巨量内存；20 已足够 IT
+     *       使用（Hikari maximum-pool-size=20 也对齐）。</li>
+     *   <li>{@code --innodb-flush-method=O_DIRECT_NO_FSYNC}：放宽 fsync，减少 IO wait；CI 数据不需持久化。</li>
+     *   <li>{@code --performance-schema=OFF}：performance_schema 默认占用 ~200MB；测试无需性能监控，关掉。</li>
+     * </ul>
      */
     @Container
     @ServiceConnection
@@ -59,6 +96,12 @@ public abstract class IntegrationTestBase {
             .withDatabaseName("monitor")
             .withUsername("test")
             .withPassword("test")
+            .withCommand(
+                    "--innodb-buffer-pool-size=64M",
+                    "--max-connections=20",
+                    "--innodb-flush-method=O_DIRECT_NO_FSYNC",
+                    "--performance-schema=OFF"
+            )
             .withReuse(true);
 
     @Container
@@ -113,5 +156,40 @@ public abstract class IntegrationTestBase {
         registry.add("spring.influx.password", () -> "monitor-test-password");
         registry.add("spring.influx.bucket", () -> "monitor");
         registry.add("spring.influx.organization", () -> "monitor");
+    }
+
+    /**
+     * 每个 IT 类启动前直接通过 JDBC {@link DriverManager} ping MySQL 容器，绕过 Spring HikariCP 池，
+     * 把"MySQL 容器死亡"和"Spring 池状态死"两类失败明确区分。
+     *
+     * <p><b>背景</b>：CI runner 7GB RAM 跑 4 容器 + Spring Boot + Maven 触发 MySQL OOM 时，docker
+     * 进程 kill 了 mysqld 但 Testcontainers 的 {@link MySQLContainer#isRunning()} 返回缓存的
+     * "started" 状态（不去 ping Docker），所以静态字段还 "alive"，但实际 mysqld 已死 → Hikari pool
+     * 在 @BeforeEach 拿连接 60s 后 timeout，每个 @Test 5 分钟卡死。
+     *
+     * <p>本方法在 Spring TestContext 初始化前用 {@link DriverManager} 直连，若 MySQL 真死了，
+     * 断言立刻失败给出清晰的 {@code MySQL container is running but JDBC connect failed} 错误，
+     * 而不是漫长的 60s timeout（× N 个 @Test）。
+     *
+     * <p><b>为什么 static @BeforeAll 而不是 @BeforeEach</b>：容器是单例 {@code static final}，
+     * 死/活状态在测试方法之间不会变化（除非 OOM）。在类启动前 ping 一次就够了；放到 @BeforeEach
+     * 会增加每个 @Test ~10ms 不必要开销。
+     */
+    @BeforeAll
+    static void verifyContainerConnectivity() {
+        // 容器层：Testcontainers 看容器是否运行
+        Assertions.assertTrue(MYSQL.isRunning(),
+                "MySQL container should be running (Testcontainers level)");
+
+        // 进程层：JDBC 直连，绕过 Spring，判断 mysqld 进程是否真活着
+        String url = MYSQL.getJdbcUrl();
+        try (Connection conn = DriverManager.getConnection(url, MYSQL.getUsername(), MYSQL.getPassword());
+             Statement stmt = conn.createStatement()) {
+            stmt.execute("SELECT 1");
+        } catch (SQLException e) {
+            throw new AssertionError(
+                    "MySQL container is running but JDBC connect failed: url=" + url
+                            + ", error=" + e.getMessage(), e);
+        }
     }
 }

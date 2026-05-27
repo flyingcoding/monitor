@@ -108,6 +108,9 @@ class AlertFlowIT extends IntegrationTestBase {
     @Autowired
     private PasswordEncoder passwordEncoder;
 
+    @Autowired
+    private org.springframework.data.redis.core.StringRedisTemplate stringRedisTemplate;
+
     private String jwt;
 
     /**
@@ -126,7 +129,10 @@ class AlertFlowIT extends IntegrationTestBase {
     void resetState() {
         clientServiceImpl.initClientCache();
         SMTP.reset();
-        jwt = AdminLoginSupport.resetAndLogin(jdbcTemplate, passwordEncoder, restTemplate, baseUrl());
+        // PR3 hotfix：StringRedisTemplate 重载会在登录前 DEL jwt:frequency:1，避免 CI 连续 @BeforeEach
+        // 命中 limitOnceUpgradeCheck 拒绝（"登录验证频繁，请稍后再试"）
+        jwt = AdminLoginSupport.resetAndLogin(jdbcTemplate, passwordEncoder, stringRedisTemplate,
+                restTemplate, baseUrl());
     }
 
     @Test
