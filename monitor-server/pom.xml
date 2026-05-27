@@ -100,6 +100,13 @@
             <artifactId>spring-security-test</artifactId>
             <scope>test</scope>
         </dependency>
+        <!--    v2.0-tests：spring-boot-testcontainers 启用 @ServiceConnection 自动装配（Spring Boot 3.1+，
+                必须显式引入，非 spring-boot-starter-test 的 transitive 依赖）。    -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-testcontainers</artifactId>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>org.testcontainers</groupId>
             <artifactId>testcontainers</artifactId>
@@ -112,10 +119,34 @@
         </dependency>
         <dependency>
             <groupId>org.testcontainers</groupId>
+            <artifactId>rabbitmq</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>influxdb</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
             <artifactId>junit-jupiter</artifactId>
             <scope>test</scope>
         </dependency>
-        <!--    WireMock：v2.0-beta VictoriaMetricsProvider 单测主力 mock 服务器（HTTP /api/v2/write 与 /api/v1/query_range）    -->
+        <!--    v2.0-tests：集成测试隔离第三方 SMTP（拦截 MailNotificationChannel 出口）    -->
+        <dependency>
+            <groupId>com.icegreen</groupId>
+            <artifactId>greenmail-junit5</artifactId>
+            <version>2.0.1</version>
+            <scope>test</scope>
+        </dependency>
+        <!--    v2.0-tests：集成测试异步轮询（SSE / RabbitMQ / 探测调度等异步链路断言）    -->
+        <dependency>
+            <groupId>org.awaitility</groupId>
+            <artifactId>awaitility</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!--    WireMock：v2.0-beta VictoriaMetricsProvider 单测主力 mock 服务器（HTTP /api/v2/write 与 /api/v1/query_range）
+                v2.0-tests 复用拦截 Webhook / 钉钉 / 飞书 HTTP 出口    -->
         <dependency>
             <groupId>org.wiremock</groupId>
             <artifactId>wiremock-standalone</artifactId>
@@ -303,6 +334,21 @@
                                 </rule>
                             </rules>
                         </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <!-- v2.0-tests：maven-failsafe-plugin 跑集成测试（*IT.java），绑到 integration-test + verify 阶段。
+                 本地 `mvn test`（默认）只跑 Surefire 单测；本地 `mvn verify` 串 Surefire + Failsafe + JaCoCo check；
+                 CI `mvn verify` 跑全套。Failsafe 默认匹配 *IT.java / IT*.java，无需额外 includes 配置。 -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-failsafe-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>integration-test</goal>
+                            <goal>verify</goal>
+                        </goals>
                     </execution>
                 </executions>
             </plugin>

@@ -1,0 +1,83 @@
+# v2.0-tests 集成测试 profile：仅放静态 / Testcontainers 不会动态注入的配置。
+# MySQL / Redis / RabbitMQ 走 @ServiceConnection（Spring Boot 3.5.10 内置）自动注入；
+# InfluxDB 走 IntegrationTestBase 的 @DynamicPropertySource 注入。
+# 切勿在此文件写 spring.datasource.* / spring.data.redis.* / spring.rabbitmq.* —— Testcontainers 会覆盖。
+spring:
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: true
+  mail:
+    # 与 GreenMailSupport.smtpExtension() 默认 ServerSetupTest.SMTP 端口 3025 对齐
+    host: localhost
+    port: 3025
+    username: test@example.com
+    password: test
+    properties:
+      from: test@example.com
+  security:
+    jwt:
+      key: it-jwt-secret
+      expire: 72
+      limit:
+        base: 10
+        upgrade: 300
+        frequency: 30
+    filter:
+      order: -100
+  web:
+    verify:
+      mail-limit: 60
+    flow:
+      period: 5
+      limit: 100
+      block: 30
+    cors:
+      origin: '*'
+      credentials: false
+      methods: '*'
+
+security:
+  ssh:
+    # 与 CI workflow 既有 SSH_ENCRYPT_KEY 一致，避免分歧密钥
+    encrypt-key: MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
+
+monitor:
+  oidc:
+    enabled: false
+  api-token:
+    # Base64 32-byte 测试固定密钥（与 JWT_KEY 不同）
+    hmac-key: aXQtaG1hYy1rZXktZm9yLXRlc3RpbmctMTIzNDU2Nzg5MA==
+  password:
+    policy: none
+  health-check:
+    # 避免后台调度任务（ClientHealthCheckTask）干扰集成测试断言
+    enabled: false
+  otlp:
+    enabled: true
+    max-payload-size: 4194304
+  tsdb:
+    provider: influxdb
+    buffer:
+      # 测试期写到 target/ 下，避免污染开发环境 data/ 目录
+      dir: target/tsdb-buffer-it
+      replay-interval-ms: 15000
+      batch-size: 200
+
+resilience4j:
+  circuitbreaker:
+    instances:
+      tsdb:
+        sliding-window-type: COUNT_BASED
+        sliding-window-size: 10
+        minimum-number-of-calls: 5
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 30s
+        permitted-number-of-calls-in-half-open-state: 3
+        automatic-transition-from-open-to-half-open-enabled: true
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health

@@ -9,51 +9,10 @@ on:
 jobs:
   server:
     runs-on: ubuntu-latest
-    services:
-      mysql:
-        image: mysql:8.0
-        env:
-          MYSQL_ROOT_PASSWORD: test
-          MYSQL_DATABASE: monitor
-        ports:
-          - 3306:3306
-        options: >-
-          --health-cmd="mysqladmin ping -h localhost -ptest"
-          --health-interval=10s
-          --health-timeout=5s
-          --health-retries=10
-      redis:
-        image: redis:7-alpine
-        ports:
-          - 6379:6379
-      rabbitmq:
-        image: rabbitmq:3-management-alpine
-        ports:
-          - 5672:5672
-      influxdb:
-        image: influxdb:2.7
-        env:
-          DOCKER_INFLUXDB_INIT_MODE: setup
-          DOCKER_INFLUXDB_INIT_USERNAME: admin
-          DOCKER_INFLUXDB_INIT_PASSWORD: admin123456
-          DOCKER_INFLUXDB_INIT_ORG: monitor
-          DOCKER_INFLUXDB_INIT_BUCKET: monitor
-        ports:
-          - 8086:8086
+    # v2.0-tests：删除 GitHub Actions services 块，集成测试改走 Testcontainers
+    # （docker daemon 已是 ubuntu-latest runner 自带），保留 JWT_KEY / SSH_ENCRYPT_KEY / MAIL_*
+    # 是因为既有 *Test.java 单测 / Spring 占位符仍可能消费这些环境变量
     env:
-      MYSQL_URL: jdbc:mysql://localhost:3306/monitor?useSSL=false&allowPublicKeyRetrieval=true
-      MYSQL_USER: root
-      MYSQL_PASSWORD: test
-      REDIS_HOST: localhost
-      REDIS_PASSWORD: ''
-      RABBITMQ_HOST: localhost
-      RABBITMQ_USER: guest
-      RABBITMQ_PASSWORD: guest
-      INFLUX_URL: http://localhost:8086
-      INFLUX_USER: admin
-      INFLUX_PASSWORD: admin123456
-      INFLUX_ORG: monitor
-      INFLUX_BUCKET: monitor
       JWT_KEY: test-jwt-key
       SSH_ENCRYPT_KEY: MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
       MAIL_USERNAME: test@example.com
