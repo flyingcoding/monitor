@@ -9,12 +9,24 @@ spring:
     baseline-on-migrate: true
   mail:
     # 与 GreenMailSupport.smtpExtension() 默认 ServerSetupTest.SMTP 端口 3025 对齐
-    host: localhost
+    # PR3 hotfix（CI run 26527611240）：CI 上 60s 内 GreenMail 未收到邮件。怀疑是
+    # IPv6/IPv4 resolve 不一致——ubuntu-latest runner localhost 默认解析到 [::1]，
+    # 而 GreenMail 的 ServerSetupTest.SMTP 仅 bind 127.0.0.1 → JavaMailSender 连
+    # IPv6 端点的 [::1]:3025 时一直 connect 不上（Spring Boot JavaMailSender 默认
+    # 无 connectionTimeout）。显式写 127.0.0.1 强制 IPv4，旁路掉这个 IPv6 fallback。
+    host: 127.0.0.1
     port: 3025
     username: test@example.com
     password: test
     properties:
       from: test@example.com
+      # 显式 connection / smtp / write timeout 防止 mailSender.send 在 IPv6
+      # bad-route 场景下永久阻塞 NotificationQueueListener 线程
+      mail:
+        smtp:
+          connectiontimeout: 5000
+          timeout: 5000
+          writetimeout: 5000
   security:
     jwt:
       key: it-jwt-secret
