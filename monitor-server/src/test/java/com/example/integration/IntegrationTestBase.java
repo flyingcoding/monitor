@@ -14,6 +14,8 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
 
+import java.util.Map;
+
 /**
  * v2.0-tests 集成测试基类：单例 Testcontainers + Spring Boot {@code @ServiceConnection} 自动装配。
  *
@@ -44,12 +46,21 @@ import org.testcontainers.utility.DockerImageName;
 @Sql(scripts = "/cleanup-after-test.sql", executionPhase = Sql.ExecutionPhase.AFTER_TEST_METHOD)
 public abstract class IntegrationTestBase {
 
+    /**
+     * MySQL 容器：使用 tmpfs 挂载 {@code /var/lib/mysql} 让数据文件全部驻留内存——
+     * GitHub Actions ubuntu-latest 默认 docker daemon 在 7GB RAM 上跑 4 个容器 + Spring Boot + Maven JVM
+     * 时容易因 IO 抖动让 MySQL 健康检查超时被 OOM-killed，进而让后续 IT 的 HikariCP 连接 30s 超时。
+     * <p>
+     * tmpfs 不持久化（与 IT 数据生命周期"测试方法粒度"语义一致），同时显著降 IO，验证为 PR2 hotfix 的
+     * SmokeIT Connection refused 的可能根因之一。
+     */
     @Container
     @ServiceConnection
     protected static final MySQLContainer<?> MYSQL = new MySQLContainer<>(DockerImageName.parse("mysql:8.0"))
             .withDatabaseName("monitor")
             .withUsername("test")
             .withPassword("test")
+            .withTmpFs(Map.of("/var/lib/mysql", "rw"))
             .withReuse(true);
 
     @Container
@@ -63,29 +74,45 @@ public abstract class IntegrationTestBase {
     protected static final RabbitMQContainer RABBIT = new RabbitMQContainer(DockerImageName.parse("rabbitmq:3-management-alpine"))
             .withReuse(true);
 
+    /**
+     * InfluxDB 2.7 容器初始化：使用 {@code withUsername} / {@code withPassword} 设置 v2 setup 凭证。
+     * <p>
+     * <b>PR2 hotfix</b>：之前用 {@code withAdmin} / {@code withAdminPassword} 是 v1 字段，
+     * 对 v2 setup 流程不起作用——容器实际启动用默认 {@code test-user} / {@code test-password}，
+     * 而 IT 注入 {@code monitor.tsdb.influxdb.user=admin} → {@code InfluxDBClientFactory.create}
+     * 走的是 v1 兼容鉴权（用户/密码），凭证不匹配 → {@code WriteApiBlocking.writeMeasurement} 抛
+     * {@code UnauthorizedException}，最终被 Spring MVC ExceptionHandler 翻成 500。
+     * <p>
+     * v2 setup 要求 password ≥ 8 字符，故选 {@code monitor-test} 满足约束；
+     * organization/bucket 同步对齐到 {@code @DynamicPropertySource} 注入值。
+     */
     @Container
     protected static final InfluxDBContainer<?> INFLUX = new InfluxDBContainer<>(DockerImageName.parse("influxdb:2.7"))
-            .withAdmin("admin")
-            .withAdminPassword("admin123456")
+            .withUsername("monitor")
+            .withPassword("monitor-test-password")
             .withOrganization("monitor")
             .withBucket("monitor")
+            .withAdminToken("monitor-it-admin-token")
             .withReuse(true);
 
     /**
      * InfluxDB 2.7 没有官方 {@code @ServiceConnection} 工厂，显式注入 v2.0-beta 双 namespace
      * （新 {@code monitor.tsdb.influxdb.*} + 遗留 {@code spring.influx.*}）保证 InfluxDbProvider /
      * deprecated path 都拿到容器地址。
+     * <p>
+     * 凭证必须与 {@link #INFLUX} 的 {@code withUsername} / {@code withPassword} 完全一致；
+     * 不一致会让 v1 兼容鉴权失败，触发 PR2 hotfix 修复的 500 回归。
      */
     @DynamicPropertySource
     static void influxProps(DynamicPropertyRegistry registry) {
         registry.add("monitor.tsdb.influxdb.url", INFLUX::getUrl);
-        registry.add("monitor.tsdb.influxdb.user", () -> "admin");
-        registry.add("monitor.tsdb.influxdb.password", () -> "admin123456");
+        registry.add("monitor.tsdb.influxdb.user", () -> "monitor");
+        registry.add("monitor.tsdb.influxdb.password", () -> "monitor-test-password");
         registry.add("monitor.tsdb.influxdb.bucket", () -> "monitor");
         registry.add("monitor.tsdb.influxdb.organization", () -> "monitor");
         registry.add("spring.influx.url", INFLUX::getUrl);
-        registry.add("spring.influx.user", () -> "admin");
-        registry.add("spring.influx.password", () -> "admin123456");
+        registry.add("spring.influx.user", () -> "monitor");
+        registry.add("spring.influx.password", () -> "monitor-test-password");
         registry.add("spring.influx.bucket", () -> "monitor");
         registry.add("spring.influx.organization", () -> "monitor");
     }

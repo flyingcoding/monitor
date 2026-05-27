@@ -352,7 +352,13 @@
             </plugin>
             <!-- v2.0-tests：maven-failsafe-plugin 跑集成测试（*IT.java），绑到 integration-test + verify 阶段。
                  本地 `mvn test`（默认）只跑 Surefire 单测；本地 `mvn verify` 串 Surefire + Failsafe + JaCoCo check；
-                 CI `mvn verify` 跑全套。Failsafe 默认匹配 *IT.java / IT*.java，无需额外 includes 配置。 -->
+                 CI `mvn verify` 跑全套。Failsafe 默认匹配 *IT.java / IT*.java，无需额外 includes 配置。
+
+                 PR2 hotfix：useFile=false + redirectTestOutputToFile=false 让 Spring Boot 启动 + 失败异常栈
+                 直接打到 stdout，GitHub Actions 才能从 CI 日志看到 ValidationController.handleException 的
+                 `log.error("未处理的异常", exception)` 原始堆栈，定位 500 根因。否则 Failsafe 默认把
+                 test 进程 stdout/stderr 重定向到 target/failsafe-reports/<class>-output.txt，CI 不上传该文件。
+                 trimStackTrace=false 让 assertion 错误带完整调用链便于跨 JVM 调试。 -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-failsafe-plugin</artifactId>
@@ -364,6 +370,11 @@
                         </goals>
                     </execution>
                 </executions>
+                <configuration>
+                    <useFile>false</useFile>
+                    <redirectTestOutputToFile>false</redirectTestOutputToFile>
+                    <trimStackTrace>false</trimStackTrace>
+                </configuration>
             </plugin>
         </plugins>
         <resources>

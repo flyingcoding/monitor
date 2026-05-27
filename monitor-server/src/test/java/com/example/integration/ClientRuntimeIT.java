@@ -21,6 +21,7 @@ import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
 
@@ -47,7 +48,8 @@ import static org.awaitility.Awaitility.await;
  *       MySQL {@code client} 表落库；</li>
  *   <li>注册后客户端用持久化 token 调 {@code POST /monitor/runtime/batch} →
  *       {@link TimeSeriesAdapter} 真实写入 InfluxDB（通过读路径反查验证）；</li>
- *   <li>管理员（{@code admin/admin123}，Flyway V1 预置）登录拿 JWT →
+ *   <li>管理员（{@code admin / KNOWN_ADMIN_PASSWORD}，每个 @Test 在 {@link #resetIntegrationState()} 内
+ *       通过真实 {@code PasswordEncoder} 重置）登录拿 JWT →
  *       订阅 {@code GET /api/sse/runtime/{clientId}?token=...} →
  *       推送一次 runtime → 真实接收 {@code event: runtime} 帧。</li>
  * </ol>
@@ -56,8 +58,9 @@ import static org.awaitility.Awaitility.await;
  * 接口注入避免重写 Flux 查询；SSE 验证用 JDK {@link HttpClient} 流式读取（避开引入 spring-webflux）。
  *
  * <p>测试间隔离：每个 {@code @Test} 通过 {@link IntegrationTestBase} 上挂的
- * {@code @Sql(AFTER_TEST_METHOD)} 清表，并在 {@link #refreshClientCache()} 主动失效 Caffeine 缓存
- * 防止 {@code ClientServiceImpl#findClientByToken} 命中前一个测试残留。
+ * {@code @Sql(AFTER_TEST_METHOD)} 清表，并在 {@link #resetIntegrationState()} 主动失效 Caffeine 缓存
+ * 防止 {@code ClientServiceImpl#findClientByToken} 命中前一个测试残留；同时重置 admin 密码
+ * 让 form 登录可用。
  */
 class ClientRuntimeIT extends IntegrationTestBase {
 
@@ -79,14 +82,43 @@ class ClientRuntimeIT extends IntegrationTestBase {
     @Autowired
     private TimeSeriesAdapter timeSeriesAdapter;
 
+    @Autowired
+    private PasswordEncoder passwordEncoder;
+
     /**
-     * 每个测试方法前：调用 {@link ClientServiceImpl#initClientCache()} 让 Caffeine
-     * {@code clientIdCache / clientTokenCache} 与 cleanup-after-test.sql 截断后的 DB 状态对齐，
-     * 避免上一个 @Test 注册的 client 仍留在缓存里被命中。
+     * 集成测试期间统一用的 admin 明文密码：每个 @Test 通过 {@link #resetAdminPassword()}
+     * 将 Flyway V1 预置的 BCrypt 哈希（明文未文档化、无法在测试代码里复用）覆盖为本常量的哈希。
+     * <p>
+     * 与生产 admin 行为隔离：cleanup-after-test.sql 仍保留 Flyway 原始哈希，避免污染同库 prod schema。
+     */
+    private static final String KNOWN_ADMIN_PASSWORD = "monitor-it-admin-123";
+
+    /**
+     * 每个测试方法前：
+     * <ol>
+     *   <li>调用 {@link ClientServiceImpl#initClientCache()} 让 Caffeine
+     *       {@code clientIdCache / clientTokenCache} 与 cleanup-after-test.sql 截断后的 DB 状态对齐，
+     *       避免上一个 @Test 注册的 client 仍留在缓存里被命中；</li>
+     *   <li>调用 {@link #resetAdminPassword()} 把 admin 行的 BCrypt 哈希覆盖为 {@link #KNOWN_ADMIN_PASSWORD}
+     *       的运行时哈希——Flyway V1 预置的哈希明文未文档化，无法在测试里直接 form-login。</li>
+     * </ol>
      */
     @BeforeEach
-    void refreshClientCache() {
+    void resetIntegrationState() {
         clientServiceImpl.initClientCache();
+        resetAdminPassword();
+    }
+
+    /**
+     * 把 admin 账户密码重置为 {@link #KNOWN_ADMIN_PASSWORD}，方便 {@link #loginAsAdmin()} form 登录。
+     * 注入 {@link PasswordEncoder} 走真实 BCrypt 流程，与 {@code SecurityConfiguration} 装配的 encoder 一致。
+     */
+    private void resetAdminPassword() {
+        String hashed = passwordEncoder.encode(KNOWN_ADMIN_PASSWORD);
+        int updated = jdbcTemplate.update(
+                "UPDATE account SET password = ? WHERE username = 'admin'", hashed);
+        Assertions.assertEquals(1, updated,
+                "Flyway V1 预置 admin 行应被 UPDATE，实际 updated=" + updated);
     }
 
     @Test
@@ -359,14 +391,17 @@ class ClientRuntimeIT extends IntegrationTestBase {
     }
 
     /**
-     * 用 Flyway V1 预置的 {@code admin / admin123} 做表单登录，返回 AuthorizeVO.token。
+     * 用 {@link #resetAdminPassword()} 覆盖后的 admin 行做表单登录，返回 AuthorizeVO.token。
      * Spring Security 的 formLogin 端点 {@code POST /api/auth/login} 接受
      * {@code application/x-www-form-urlencoded}。
+     * <p>
+     * 不复用 Flyway V1__init.sql 第 14-15 行预置的 BCrypt 哈希——它对应的明文未在 README / EVOLUTION /
+     * CLAUDE.md 文档化，靠猜（"admin123" 等常见值）会让 CI 出现 401 Bad credentials 假阳性。
      */
     private String loginAsAdmin() {
         MultiValueMap<String, String> form = new LinkedMultiValueMap<>();
         form.add("username", "admin");
-        form.add("password", "admin123");
+        form.add("password", KNOWN_ADMIN_PASSWORD);
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_FORM_URLENCODED);
         ResponseEntity<String> response = restTemplate.exchange(
