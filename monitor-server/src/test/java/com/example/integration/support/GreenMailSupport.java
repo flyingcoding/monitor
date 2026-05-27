@@ -31,11 +31,18 @@ public final class GreenMailSupport {
     /**
      * 构建带默认登录凭证的 GreenMailExtension。withPerMethodLifecycle(false) 让 SMTP server
      * 在整个测试类生命周期内只启一次，避免每个 @Test 重启 GreenMail（端口绑定 race condition）。
+     *
+     * <p>PR3 hotfix（CI run 26528116716）：加 {@code withDisabledAuthentication()} 让 GreenMail
+     * 接受任意 AUTH 凭证，绕过 JavaMailSender vs GreenMail AUTH LOGIN 协商对齐的潜在问题
+     * （之前 60s 内邮件没到，怀疑是 AUTH 校验 silently 拒收）。
+     * 同时保留 {@code withUser} 预创建 {@code test@example.com}（依赖默认 MessageDeliveryHandler
+     * 自动创建未知收件人 mailbox，{@code alerts@example.com} 也能被投递）。
      */
     public static GreenMailExtension smtpExtension() {
         return new GreenMailExtension(ServerSetupTest.SMTP)
                 .withConfiguration(GreenMailConfiguration.aConfig()
-                        .withUser(DEFAULT_USERNAME, DEFAULT_PASSWORD))
+                        .withUser(DEFAULT_USERNAME, DEFAULT_PASSWORD)
+                        .withDisabledAuthentication())
                 .withPerMethodLifecycle(false);
     }
 }

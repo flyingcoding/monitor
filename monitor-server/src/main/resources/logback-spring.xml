@@ -41,4 +41,21 @@
             <appender-ref ref="JSON_CONSOLE"/>
         </root>
     </springProfile>
+
+    <!-- v2.0-tests：集成测试 profile（@ActiveProfiles("it")）必须有 appenders，
+         否则 Spring Boot 不会 fallback 到默认 console appender，所有 application 日志
+         都被丢弃 → CI 上看不到 AlertEvaluator / NotificationQueueListener /
+         MailNotificationChannel / Webhook 等日志，调试无从下手。
+         配置仅 CONSOLE，无文件输出（避免污染 CI 工作目录）。 -->
+    <springProfile name="it">
+        <appender name="IT_CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+            <encoder>
+                <pattern>%d{HH:mm:ss.SSS} %-5level [%thread] (%X{reqId:-system}) %logger{36} - %msg%n</pattern>
+            </encoder>
+        </appender>
+
+        <root level="INFO">
+            <appender-ref ref="IT_CONSOLE"/>
+        </root>
+    </springProfile>
 </configuration>
