@@ -5,6 +5,7 @@ import com.alibaba.fastjson2.JSONObject;
 import com.example.entity.dto.Client;
 import com.example.entity.vo.request.RuntimeDetailVO;
 import com.example.entity.vo.response.RuntimeHistoryVO;
+import com.example.integration.support.AdminLoginSupport;
 import com.example.service.ClientService;
 import com.example.service.impl.ClientServiceImpl;
 import com.example.tsdb.TimeSeriesAdapter;
@@ -22,8 +23,6 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
-import org.springframework.util.LinkedMultiValueMap;
-import org.springframework.util.MultiValueMap;
 
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -48,8 +47,8 @@ import static org.awaitility.Awaitility.await;
  *       MySQL {@code client} 表落库；</li>
  *   <li>注册后客户端用持久化 token 调 {@code POST /monitor/runtime/batch} →
  *       {@link TimeSeriesAdapter} 真实写入 InfluxDB（通过读路径反查验证）；</li>
- *   <li>管理员（{@code admin / KNOWN_ADMIN_PASSWORD}，每个 @Test 在 {@link #resetIntegrationState()} 内
- *       通过真实 {@code PasswordEncoder} 重置）登录拿 JWT →
+ *   <li>管理员（{@code admin / AdminLoginSupport.KNOWN_ADMIN_PASSWORD}，每个 @Test 在
+ *       {@link #resetIntegrationState()} 内通过真实 {@code PasswordEncoder} 重置）登录拿 JWT →
  *       订阅 {@code GET /api/sse/runtime/{clientId}?token=...} →
  *       推送一次 runtime → 真实接收 {@code event: runtime} 帧。</li>
  * </ol>
@@ -86,39 +85,20 @@ class ClientRuntimeIT extends IntegrationTestBase {
     private PasswordEncoder passwordEncoder;
 
     /**
-     * 集成测试期间统一用的 admin 明文密码：每个 @Test 通过 {@link #resetAdminPassword()}
-     * 将 Flyway V1 预置的 BCrypt 哈希（明文未文档化、无法在测试代码里复用）覆盖为本常量的哈希。
-     * <p>
-     * 与生产 admin 行为隔离：cleanup-after-test.sql 仍保留 Flyway 原始哈希，避免污染同库 prod schema。
-     */
-    private static final String KNOWN_ADMIN_PASSWORD = "monitor-it-admin-123";
-
-    /**
      * 每个测试方法前：
      * <ol>
      *   <li>调用 {@link ClientServiceImpl#initClientCache()} 让 Caffeine
      *       {@code clientIdCache / clientTokenCache} 与 cleanup-after-test.sql 截断后的 DB 状态对齐，
      *       避免上一个 @Test 注册的 client 仍留在缓存里被命中；</li>
-     *   <li>调用 {@link #resetAdminPassword()} 把 admin 行的 BCrypt 哈希覆盖为 {@link #KNOWN_ADMIN_PASSWORD}
-     *       的运行时哈希——Flyway V1 预置的哈希明文未文档化，无法在测试里直接 form-login。</li>
+     *   <li>调用 {@link AdminLoginSupport#resetAdminPassword(JdbcTemplate, PasswordEncoder)}
+     *       把 admin 行的 BCrypt 哈希覆盖为 {@link AdminLoginSupport#KNOWN_ADMIN_PASSWORD} 的运行时哈希——
+     *       Flyway V1 预置的哈希明文未文档化于代码中，无法在测试里直接 form-login。</li>
      * </ol>
      */
     @BeforeEach
     void resetIntegrationState() {
         clientServiceImpl.initClientCache();
-        resetAdminPassword();
-    }
-
-    /**
-     * 把 admin 账户密码重置为 {@link #KNOWN_ADMIN_PASSWORD}，方便 {@link #loginAsAdmin()} form 登录。
-     * 注入 {@link PasswordEncoder} 走真实 BCrypt 流程，与 {@code SecurityConfiguration} 装配的 encoder 一致。
-     */
-    private void resetAdminPassword() {
-        String hashed = passwordEncoder.encode(KNOWN_ADMIN_PASSWORD);
-        int updated = jdbcTemplate.update(
-                "UPDATE account SET password = ? WHERE username = 'admin'", hashed);
-        Assertions.assertEquals(1, updated,
-                "Flyway V1 预置 admin 行应被 UPDATE，实际 updated=" + updated);
+        AdminLoginSupport.resetAdminPassword(jdbcTemplate, passwordEncoder);
     }
 
     @Test
@@ -391,33 +371,12 @@ class ClientRuntimeIT extends IntegrationTestBase {
     }
 
     /**
-     * 用 {@link #resetAdminPassword()} 覆盖后的 admin 行做表单登录，返回 AuthorizeVO.token。
-     * Spring Security 的 formLogin 端点 {@code POST /api/auth/login} 接受
-     * {@code application/x-www-form-urlencoded}。
-     * <p>
-     * 不复用 Flyway V1__init.sql 第 14-15 行预置的 BCrypt 哈希——它对应的明文未在 README / EVOLUTION /
-     * CLAUDE.md 文档化，靠猜（"admin123" 等常见值）会让 CI 出现 401 Bad credentials 假阳性。
+     * 调用 {@link AdminLoginSupport#loginAsAdmin(TestRestTemplate, String)} 做表单登录，返回 JWT。
+     *
+     * <p>调用前需在 {@code @BeforeEach} 已经 reset 过 admin 密码；本类的
+     * {@link #resetIntegrationState()} 已经接管这一步。
      */
     private String loginAsAdmin() {
-        MultiValueMap<String, String> form = new LinkedMultiValueMap<>();
-        form.add("username", "admin");
-        form.add("password", KNOWN_ADMIN_PASSWORD);
-        HttpHeaders headers = new HttpHeaders();
-        headers.setContentType(MediaType.APPLICATION_FORM_URLENCODED);
-        ResponseEntity<String> response = restTemplate.exchange(
-                baseUrl() + "/api/auth/login",
-                HttpMethod.POST,
-                new HttpEntity<>(form, headers),
-                String.class);
-        Assertions.assertEquals(200, response.getStatusCode().value(),
-                "/api/auth/login 应返回 HTTP 200，实际=" + response.getStatusCode()
-                        + ", body=" + response.getBody());
-        JSONObject body = JSON.parseObject(response.getBody());
-        Assertions.assertNotNull(body, "/api/auth/login 响应不应为空");
-        Assertions.assertEquals(200, body.getIntValue("code"),
-                "/api/auth/login RestBean.code 应为 200，实际=" + body);
-        JSONObject data = body.getJSONObject("data");
-        Assertions.assertNotNull(data, "/api/auth/login data 字段不应为空，实际=" + body);
-        return data.getString("token");
+        return AdminLoginSupport.loginAsAdmin(restTemplate, baseUrl());
     }
 }
