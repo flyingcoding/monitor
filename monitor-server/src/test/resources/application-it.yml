@@ -8,11 +8,15 @@ spring:
     locations: classpath:db/migration
     baseline-on-migrate: true
   mail:
-    # PR3 hotfix（CI run 26529339906）：AlertFlowIT 已不再用 GreenMail 真投递断言（改用
-    # RabbitMQ notification 队列消息断言），这里只保留最低限度配置让 Spring Boot Mail
-    # 自动装配不爆炸。host/port 默认值即可（如果 IT 未来又要走真投递再补 SMTP 测试）。
+    # PR3 hotfix（CI run 26530067276 撤回）：AlertFlowIT 已不再用 GreenMail 真投递断言（改用
+    # RabbitMQ notification 队列消息断言）。但 MailQueueListener.@Value("${spring.mail.username}")
+    # 没设默认值，本配置必须保留 username 否则所有 IT 启 Spring Context 都炸（PlaceholderResolutionException）。
+    # password / host / port 仅占位让 JavaMailSender autoconfig 不爆栈；AUTH 关闭让任何 SMTP
+    # 服务端都能接（实际本 IT 不会发邮件触达 GreenMail）。
     host: 127.0.0.1
     port: 3025
+    username: test@example.com
+    password: test
     properties:
       mail:
         smtp:
