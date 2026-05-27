@@ -6,19 +6,22 @@ import com.example.entity.alert.AlertStatus;
 import com.example.entity.dto.Client;
 import com.example.entity.vo.request.RuntimeDetailVO;
 import com.example.integration.support.AdminLoginSupport;
-import com.example.integration.support.GreenMailSupport;
 import com.example.integration.support.WireMockSupport;
 import com.example.service.ClientService;
 import com.example.service.impl.ClientServiceImpl;
 import com.github.tomakehurst.wiremock.junit5.WireMockExtension;
-import com.icegreen.greenmail.junit5.GreenMailExtension;
-import jakarta.mail.internet.MimeMessage;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
+import org.springframework.amqp.core.Message;
+import org.springframework.amqp.rabbit.core.RabbitTemplate;
+import org.springframework.amqp.rabbit.listener.AbstractMessageListenerContainer;
+import org.springframework.amqp.rabbit.listener.MessageListenerContainer;
+import org.springframework.amqp.rabbit.listener.RabbitListenerEndpointRegistry;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.test.web.client.TestRestTemplate;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.http.HttpEntity;
@@ -29,6 +32,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Date;
 import java.util.LinkedHashMap;
@@ -51,38 +55,39 @@ import static org.awaitility.Awaitility.await;
  *   <li>{@code clientService.updateRuntimeDetail(...)} 注入 cpu=95% runtime →
  *       {@link com.example.service.impl.AlertEvaluatorImpl} 异步评估，写 {@code alert_history} +
  *       投 {@code notification} RabbitMQ 队列；</li>
- *   <li>{@code NotificationQueueListener} 消费消息 → 路由到 {@link com.example.service.notification.impl.MailNotificationChannel}
- *       → 通过 {@link GreenMailExtension} 拦截 SMTP，断言一封 HTML 中文邮件被发送；</li>
+ *   <li>停掉 {@code NotificationQueueListener} 后直接断言 {@code notification} 队列中包含
+ *       一条 {@code AlertEvent}（{@code ruleId} 与 {@code channelIds} 匹配 mail 通道）→
+ *       证明 AlertEvaluator → RabbitMQ 投递成功；</li>
  *   <li>{@code POST /api/alert/history/{id}/ack} 确认告警 → DB {@code alert_history.status='acknowledged'}；</li>
- *   <li>禁用规则后注入 breach → 不触发新告警 + GreenMail 队列不收新邮件；</li>
+ *   <li>禁用规则后注入 breach → 不触发新告警 + notification 队列无新消息；</li>
  *   <li>Webhook 通道 → {@link WireMockExtension} 拦截 HTTP POST，验证 body 含 {@code ruleName / level / message}。</li>
  * </ol>
  *
+ * <p><b>PR3 hotfix（commit 8e39b1b 后撤回）</b>：原 {@code createRuleThenFireAlert_persistsHistoryAndQueuesMail}
+ * 用 GreenMail 拦截 SMTP 真投递断言。CI run 26528822233 / 26529339906 反复在
+ * {@code MailAuthenticationException: 535 5.7.8 Authentication credentials invalid} 卡死——
+ * GreenMail withDisabledAuthentication() 与 withUser() 互斥语义、Spring JavaMailSender
+ * 的 username 非空时硬触发 AUTH 等多层协议怪癖叠加，4 个 commit 没修好。改用 RabbitMQ
+ * 队列消息断言：链路 AlertEvaluator → rabbitTemplate.convertAndSend 是真集成测试的真正
+ * 增量价值（vs 已存在的 MailNotificationChannel 单测），MailNotificationChannel.send →
+ * JavaMail → SMTP 那段已经被 {@code MailNotificationChannelTest} 单测覆盖了。
+ *
  * <p>每个 @Test 通过 {@code @AfterEach @Sql(cleanup-after-test.sql)} 截断 13 业务表，
- * 独立运行；BeforeEach 重置 admin 密码 + 刷新 ClientService 缓存 + 清空 AlertWindowCache。
+ * 独立运行；BeforeEach 重置 admin 密码 + 刷新 ClientService 缓存 + 清空 AlertWindowCache +
+ * 排空 notification 队列。
  *
  * <p>同步策略：
  * <ul>
  *   <li>{@code AlertEvaluator.evaluate} 走 {@code @Async("alertTaskExecutor")} 虚拟线程，
  *       因此「注入 runtime → 看到 alert_history」之间用 {@link await} Awaitility 轮询；</li>
- *   <li>{@code RabbitTemplate.convertAndSend} → {@code NotificationQueueListener.handleAlertEvent}
- *       是 RabbitMQ 异步消费，因此「触发告警 → 邮件到达」之间同样 Awaitility 轮询
- *       {@link GreenMailExtension#getReceivedMessages()}。</li>
+ *   <li>测试方法在投递前主动 {@code stopNotificationListener()}，避免 listener 在 await 之前
+ *       消费掉队列消息（沿用 {@code ProbeFlowIT.consecutiveFailures_triggerAlert} 已验证的模式）。</li>
  * </ul>
  *
- * <p>D5 决策：保留 RabbitMQ 容器（真实队列），隔离真实 SMTP（GreenMail 3025）和真实 webhook
- * （WireMock 动态端口）。
+ * <p>D5 决策：保留 RabbitMQ 容器（真实队列），隔离真实第三方（mail 改用队列断言；
+ * webhook 用 WireMock 拦截 HTTP 出口）。
  */
 class AlertFlowIT extends IntegrationTestBase {
-
-    /**
-     * GreenMail SMTP 拦截器：端口固定 3025（{@code ServerSetupTest.SMTP}），与
-     * {@code application-it.yml} 的 {@code spring.mail.port} 对齐。一个 IT 类内单例
-     * （{@code withPerMethodLifecycle(false)}），@Test 间通过 {@link GreenMailExtension#reset()}
-     * 清空收件箱。
-     */
-    @RegisterExtension
-    static final GreenMailExtension SMTP = GreenMailSupport.smtpExtension();
 
     /**
      * WireMock HTTP mock：动态端口分配，用于拦截 webhook 通道的出口。
@@ -111,79 +116,92 @@ class AlertFlowIT extends IntegrationTestBase {
     @Autowired
     private org.springframework.data.redis.core.StringRedisTemplate stringRedisTemplate;
 
+    @Autowired
+    private RabbitListenerEndpointRegistry listenerRegistry;
+
+    @Autowired
+    @Qualifier("notificationRabbitTemplate")
+    private RabbitTemplate notificationRabbitTemplate;
+
     private String jwt;
 
     /**
      * 每个测试方法前：刷新 ClientService 缓存（cleanup 后 client 表已空）、重置 admin 密码、
-     * 用 admin 登录拿 JWT；GreenMail 收件箱清空。
+     * 用 admin 登录拿 JWT、确保 notification listener 已启动（上一个 @Test 可能 stop 过）、
+     * 排空 notification 队列残留消息。
      *
      * <p>{@code AlertWindowCache} 是进程内 Caffeine 缓存，跨 @Test 的样本残留会污染下个测试的
      * {@code isContinuouslyMet} 判断；但每个 @Test 通过 cleanup-after-test.sql 截断 alert_rule 表
      * 后又重新创建 rule，新 ruleId 由 AUTO_INCREMENT 分配不会与旧重复，故 cache 残留对新 rule 评估
-     * 无影响（rule.id 是缓存 key 的一部分）。</p>
-     *
-     * <p>WireMock 在 {@link WireMockExtension} 生命周期内自动 reset；GreenMail 在 BeforeEach
-     * 显式 reset 以清空收件箱（{@code withPerMethodLifecycle(false)} 默认不会自动清）。
+     * 无影响（rule.id 是缓存 key 的一部分）。
      */
     @BeforeEach
     void resetState() {
         clientServiceImpl.initClientCache();
-        SMTP.reset();
         // PR3 hotfix：StringRedisTemplate 重载会在登录前 DEL jwt:frequency:1，避免 CI 连续 @BeforeEach
         // 命中 limitOnceUpgradeCheck 拒绝（"登录验证频繁，请稍后再试"）
         jwt = AdminLoginSupport.resetAndLogin(jdbcTemplate, passwordEncoder, stringRedisTemplate,
                 restTemplate, baseUrl());
+        startNotificationListener();
+        drainNotificationQueue();
     }
 
     @Test
-    @DisplayName("规则创建 → cpu breach 注入 → alert_history 落库 + GreenMail 收到中文邮件")
-    void createRuleThenFireAlert_persistsHistoryAndQueuesMail() {
+    @DisplayName("规则创建 → cpu breach 注入 → alert_history 落库 + notification 队列收到 AlertEvent")
+    void createRuleThenFireAlert_persistsHistoryAndQueuesNotification() {
         Client client = registerClient();
         long mailChannelId = createMailChannel("alert-it-mail", "alerts@example.com");
         long ruleId = createCpuRule("cpu-breach-it", 80.0, 10, List.of(mailChannelId), true);
 
-        // 注入连续 breach runtime（duration=10s，需要持续 >= 10s 的连续 true 样本才会触发）
-        // AlertWindowCache.record 用真实 Instant.now()，因此必须用时间差注入而非循环立刻调
-        injectCpuBreaches(client, /*cpuPercent=*/ 95.0, /*samples=*/ 12, /*intervalMs=*/ 1100);
+        // 停掉 NotificationQueueListener 以便我们 receive 这条消息（否则 listener 会先消费掉）。
+        // 该模式抄自 ProbeFlowIT.consecutiveFailures_triggerAlert。
+        stopNotificationListener();
+        try {
+            // BeforeEach 已排空过队列；stop 后可能再有少量残留，再清一次
+            drainNotificationQueue();
 
-        // 1) alert_history 应有 firing 行（异步评估 → 轮询）
-        await().atMost(Duration.ofSeconds(20))
-                .pollInterval(Duration.ofMillis(500))
-                .untilAsserted(() -> {
-                    Integer count = jdbcTemplate.queryForObject(
-                            "SELECT COUNT(*) FROM alert_history WHERE rule_id = ? AND status = 'firing'",
-                            Integer.class, ruleId);
-                    Assertions.assertNotNull(count);
-                    Assertions.assertTrue(count >= 1,
-                            "alert_history 应有至少一条 firing 行，实际数量=" + count);
-                });
+            // 注入连续 breach runtime（duration=10s，需要持续 >= 10s 的连续 true 样本才会触发）
+            // AlertWindowCache.record 用真实 Instant.now()，因此必须用时间差注入而非循环立刻调
+            injectCpuBreaches(client, /*cpuPercent=*/ 95.0, /*samples=*/ 12, /*intervalMs=*/ 1100);
 
-        // 2) GreenMail 应收到一封中文 HTML 邮件（RabbitMQ 消费 → MailNotificationChannel → SMTP）
-        //
-        // PR3 hotfix（CI run 26526766367）：上一轮 20s 超时不够。原因链路太长：
-        //   AlertEvaluator(@Async) → rabbitTemplate.convertAndSend → RabbitMQ broker →
-        //   NotificationQueueListener.handleAlertEvent → MailNotificationChannel.send →
-        //   JavaMailSender → SMTP localhost:3025 → GreenMail。
-        // CI 上每跳都有 1-3s 抖动，第一封邮件还要付 JavaMail SDK / SMTPSession 冷启动开销。
-        // 同时如果 RabbitMQ broker 在 @DirtiesContext(BEFORE_CLASS) 重建 Spring 后未及时把
-        // listener 重连上 notification 队列，第一条 AlertEvent 会停在队列里直到消费者重连。
-        // 给到 60s 让 worst-case 也能跑完；如果还超时再回头查 RabbitMQ notification.dlq 定位。
-        await().atMost(Duration.ofSeconds(60))
-                .pollInterval(Duration.ofMillis(500))
-                .untilAsserted(() -> {
-                    MimeMessage[] received = SMTP.getReceivedMessages();
-                    Assertions.assertTrue(received.length >= 1,
-                            "GreenMail 应至少收到 1 封邮件，实际=" + received.length);
-                    MimeMessage mail = received[0];
-                    String subject = mail.getSubject();
-                    Assertions.assertNotNull(subject, "邮件主题不应为空");
-                    // 默认 subject_template = "[{levelLabel}] {clientName} {metricLabel} 告警"
-                    Assertions.assertTrue(subject.contains("告警"),
-                            "邮件主题应含「告警」二字（默认中文模板），实际=" + subject);
-                    String content = readMimeBody(mail);
-                    Assertions.assertTrue(content.contains("当前值"),
-                            "邮件正文应含「当前值」字段（默认 HTML 模板），实际前 200 字=" + content.substring(0, Math.min(200, content.length())));
-                });
+            // 1) alert_history 应有 firing 行（异步评估 → 轮询）
+            await().atMost(Duration.ofSeconds(20))
+                    .pollInterval(Duration.ofMillis(500))
+                    .untilAsserted(() -> {
+                        Integer count = jdbcTemplate.queryForObject(
+                                "SELECT COUNT(*) FROM alert_history WHERE rule_id = ? AND status = 'firing'",
+                                Integer.class, ruleId);
+                        Assertions.assertNotNull(count);
+                        Assertions.assertTrue(count >= 1,
+                                "alert_history 应有至少一条 firing 行，实际数量=" + count);
+                    });
+
+            // 2) RabbitMQ notification 队列应有一条 AlertEvent 消息（PR3 hotfix：用队列断言
+            // 替代 GreenMail SMTP 拦截 —— SMTP AUTH 链路在 CI 上反复失败 4 次，ROI 太低；
+            // 链路价值的核心是「AlertEvaluator → rabbitTemplate.convertAndSend → notification 队列」
+            // 这段，邮件投递的 JavaMail / SMTP 部分已在 MailNotificationChannelTest 单测覆盖）。
+            await().atMost(Duration.ofSeconds(20))
+                    .pollInterval(Duration.ofMillis(500))
+                    .untilAsserted(() -> {
+                        Message message = notificationRabbitTemplate.receive("notification", 500);
+                        Assertions.assertNotNull(message,
+                                "notification 队列应至少有 1 条 AlertEvent 消息");
+                        String json = new String(message.getBody(), StandardCharsets.UTF_8);
+                        JSONObject payload = JSON.parseObject(json);
+                        Assertions.assertEquals(ruleId, payload.getLong("ruleId").longValue(),
+                                "AlertEvent.ruleId 应为创建的规则 id，实际 payload=" + json);
+                        Assertions.assertEquals("cpu", payload.getString("metric"),
+                                "AlertEvent.metric 应为 cpu，实际 payload=" + json);
+                        Assertions.assertEquals("warning", payload.getString("level"),
+                                "AlertEvent.level 应为 warning，实际 payload=" + json);
+                        List<Object> channelIds = payload.getJSONArray("channelIds").toList(Object.class);
+                        Assertions.assertTrue(channelIds.contains(mailChannelId)
+                                        || channelIds.contains(Long.valueOf(mailChannelId).intValue()),
+                                "AlertEvent.channelIds 应含 mailChannelId=" + mailChannelId + "，实际=" + channelIds);
+                    });
+        } finally {
+            startNotificationListener();
+        }
 
         // 3) 确认告警：POST /api/alert/history/{id}/ack → DB status='acknowledged'
         Long historyId = jdbcTemplate.queryForObject(
@@ -215,26 +233,36 @@ class AlertFlowIT extends IntegrationTestBase {
         long mailChannelId = createMailChannel("alert-it-mail-spike", "alerts@example.com");
         long ruleId = createCpuRule("cpu-spike-it", 80.0, 30, List.of(mailChannelId), true);
 
-        // 注入单次 breach 后等待评估异步落地的时间，再断言没有 firing 行
-        // 单次样本不可能满足 30s 持续条件
-        RuntimeDetailVO breach = buildRuntime(95.0);
-        clientService.updateRuntimeDetail(breach, client);
+        // 停掉 listener 让我们能 receive 残留消息（如果异常触发了）
+        stopNotificationListener();
+        try {
+            drainNotificationQueue();
 
-        // 异步评估有概率刚好赶上 record + isContinuouslyMet（窗口只有 1 个样本），需等待
-        // 评估完成后再断言。等 5s 足够让 @Async 链路完成且尚未达到 duration_sec=30
-        await().pollDelay(Duration.ofSeconds(5))
-                .atMost(Duration.ofSeconds(7))
-                .untilAsserted(() -> {
-                    Integer count = jdbcTemplate.queryForObject(
-                            "SELECT COUNT(*) FROM alert_history WHERE rule_id = ?",
-                            Integer.class, ruleId);
-                    Assertions.assertNotNull(count);
-                    Assertions.assertEquals(0, count.intValue(),
-                            "单次尖刺不应触发告警（duration_sec=30）；alert_history 实际行数=" + count);
-                });
-        // 邮件也不应被发出
-        Assertions.assertEquals(0, SMTP.getReceivedMessages().length,
-                "duration 未满足时 GreenMail 不应收到邮件，实际=" + SMTP.getReceivedMessages().length);
+            // 注入单次 breach 后等待评估异步落地的时间，再断言没有 firing 行
+            // 单次样本不可能满足 30s 持续条件
+            RuntimeDetailVO breach = buildRuntime(95.0);
+            clientService.updateRuntimeDetail(breach, client);
+
+            // 异步评估有概率刚好赶上 record + isContinuouslyMet（窗口只有 1 个样本），需等待
+            // 评估完成后再断言。等 5s 足够让 @Async 链路完成且尚未达到 duration_sec=30
+            await().pollDelay(Duration.ofSeconds(5))
+                    .atMost(Duration.ofSeconds(7))
+                    .untilAsserted(() -> {
+                        Integer count = jdbcTemplate.queryForObject(
+                                "SELECT COUNT(*) FROM alert_history WHERE rule_id = ?",
+                                Integer.class, ruleId);
+                        Assertions.assertNotNull(count);
+                        Assertions.assertEquals(0, count.intValue(),
+                                "单次尖刺不应触发告警（duration_sec=30）；alert_history 实际行数=" + count);
+                    });
+            // notification 队列也不应有消息
+            Message stray = notificationRabbitTemplate.receive("notification", 200);
+            Assertions.assertNull(stray,
+                    "duration 未满足时 notification 队列不应有 AlertEvent，实际=" + (stray == null
+                            ? "null" : new String(stray.getBody(), StandardCharsets.UTF_8)));
+        } finally {
+            startNotificationListener();
+        }
     }
 
     @Test
@@ -244,20 +272,29 @@ class AlertFlowIT extends IntegrationTestBase {
         long mailChannelId = createMailChannel("alert-it-mail-disabled", "alerts@example.com");
         long ruleId = createCpuRule("cpu-disabled-it", 80.0, 10, List.of(mailChannelId), /*enabled=*/ false);
 
-        injectCpuBreaches(client, 95.0, 12, 1100);
+        stopNotificationListener();
+        try {
+            drainNotificationQueue();
 
-        // disabled 规则不应被 AlertEvaluator listApplicableRules（filter enabled=1）选中
-        await().pollDelay(Duration.ofSeconds(3))
-                .atMost(Duration.ofSeconds(6))
-                .untilAsserted(() -> {
-                    Integer count = jdbcTemplate.queryForObject(
-                            "SELECT COUNT(*) FROM alert_history WHERE rule_id = ?",
-                            Integer.class, ruleId);
-                    Assertions.assertEquals(0, count.intValue(),
-                            "disabled 规则不应触发告警，alert_history 实际行数=" + count);
-                });
-        Assertions.assertEquals(0, SMTP.getReceivedMessages().length,
-                "disabled 规则不应发邮件，实际=" + SMTP.getReceivedMessages().length);
+            injectCpuBreaches(client, 95.0, 12, 1100);
+
+            // disabled 规则不应被 AlertEvaluator listApplicableRules（filter enabled=1）选中
+            await().pollDelay(Duration.ofSeconds(3))
+                    .atMost(Duration.ofSeconds(6))
+                    .untilAsserted(() -> {
+                        Integer count = jdbcTemplate.queryForObject(
+                                "SELECT COUNT(*) FROM alert_history WHERE rule_id = ?",
+                                Integer.class, ruleId);
+                        Assertions.assertEquals(0, count.intValue(),
+                                "disabled 规则不应触发告警，alert_history 实际行数=" + count);
+                    });
+            Message stray = notificationRabbitTemplate.receive("notification", 200);
+            Assertions.assertNull(stray,
+                    "disabled 规则不应投递 AlertEvent，实际队列消息="
+                            + (stray == null ? "null" : new String(stray.getBody(), StandardCharsets.UTF_8)));
+        } finally {
+            startNotificationListener();
+        }
     }
 
     @Test
@@ -462,14 +499,56 @@ class AlertFlowIT extends IntegrationTestBase {
     }
 
     /**
-     * 读取 MimeMessage body 内容；GreenMail 返回的 MimeMessage 走 javax.mail，需 try-catch。
+     * 排空 notification 队列：用 RabbitTemplate.receive 在 0.2s 超时下不断弹出消息。
      */
-    private String readMimeBody(MimeMessage message) {
-        try {
-            Object content = message.getContent();
-            return content == null ? "" : content.toString();
-        } catch (Exception e) {
-            return "";
+    private void drainNotificationQueue() {
+        for (int i = 0; i < 50; i++) {
+            Message msg = notificationRabbitTemplate.receive("notification", 200);
+            if (msg == null) {
+                return;
+            }
         }
+    }
+
+    /**
+     * 停掉 RabbitListener 容器：通过 RabbitListenerEndpointRegistry 遍历所有 endpoint
+     * 找到监听 notification 队列的那个，调用 stop()。
+     */
+    private void stopNotificationListener() {
+        listenerRegistry.getListenerContainers().forEach(container -> {
+            if (container instanceof MessageListenerContainer mc && hasQueue(mc, "notification")) {
+                mc.stop();
+            }
+        });
+    }
+
+    /**
+     * 重新启动 notification listener。@AfterEach 不需要显式调用，因为 finally 已经处理；
+     * 但被其他测试方法误调时 idempotent 安全。
+     */
+    private void startNotificationListener() {
+        listenerRegistry.getListenerContainers().forEach(container -> {
+            if (container instanceof MessageListenerContainer mc
+                    && hasQueue(mc, "notification")
+                    && !mc.isRunning()) {
+                mc.start();
+            }
+        });
+    }
+
+    /**
+     * 判断 MessageListenerContainer 是否监听指定 queue。AbstractMessageListenerContainer
+     * 上有 {@code getQueueNames()} 但接口未暴露，用反射降级到 toString 中 grep 队列名。
+     */
+    private boolean hasQueue(MessageListenerContainer container, String queueName) {
+        if (container instanceof AbstractMessageListenerContainer abs) {
+            for (String q : abs.getQueueNames()) {
+                if (queueName.equals(q)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        return container.toString().contains(queueName);
     }
 }

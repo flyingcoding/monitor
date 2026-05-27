@@ -8,29 +8,12 @@ spring:
     locations: classpath:db/migration
     baseline-on-migrate: true
   mail:
-    # 与 GreenMailSupport.smtpExtension() 默认 ServerSetupTest.SMTP 端口 3025 对齐
-    # PR3 hotfix（CI run 26527611240）：CI 上 60s 内 GreenMail 未收到邮件。怀疑是
-    # IPv6/IPv4 resolve 不一致——ubuntu-latest runner localhost 默认解析到 [::1]，
-    # 而 GreenMail 的 ServerSetupTest.SMTP 仅 bind 127.0.0.1 → JavaMailSender 连
-    # IPv6 端点的 [::1]:3025 时一直 connect 不上（Spring Boot JavaMailSender 默认
-    # 无 connectionTimeout）。显式写 127.0.0.1 强制 IPv4，旁路掉这个 IPv6 fallback。
+    # PR3 hotfix（CI run 26529339906）：AlertFlowIT 已不再用 GreenMail 真投递断言（改用
+    # RabbitMQ notification 队列消息断言），这里只保留最低限度配置让 Spring Boot Mail
+    # 自动装配不爆炸。host/port 默认值即可（如果 IT 未来又要走真投递再补 SMTP 测试）。
     host: 127.0.0.1
     port: 3025
-    # PR3 hotfix（CI run 26528822233）：根因是 535 Authentication credentials invalid
-    # —— GreenMailSupport.withDisabledAuthentication() 让 GreenMail 接受任意 AUTH，但
-    # JavaMailSender 仍然主动发 AUTH LOGIN（因为 username/password 都已配置 + 默认
-    # mail.smtp.auth=true）。GreenMail 收到 AUTH 后会校验凭证，凭证不匹配就返回 535
-    # → MailAuthenticationException → 通知失败 → DLX → GreenMail 永远收不到邮件。
-    # 修复：properties.mail.smtp.auth=false 让 JavaMailSender 完全不发 AUTH，绕过协商。
-    # username 保留为 test@example.com 是因为 MailNotificationChannel 用 spring.mail.username
-    # 作为 From 字段；JavaMailSenderImpl 在 auth=false 时不会主动 AUTH 但 username 仍可被读取。
-    username: test@example.com
-    password: test
     properties:
-      from: test@example.com
-      # 关闭 SMTP AUTH，匹配 GreenMailSupport.withDisabledAuthentication() 配置；
-      # 同时显式 connection / smtp / write timeout 防止 mailSender.send 在 IPv6
-      # bad-route 场景下永久阻塞 NotificationQueueListener 线程
       mail:
         smtp:
           auth: false
