@@ -33,7 +33,13 @@ import org.testcontainers.utility.DockerImageName;
  * 在测试代码里 INSERT，不引入 V99__test_seed.sql。
  */
 @Testcontainers(disabledWithoutDocker = true)
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@SpringBootTest(
+        webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
+        // 集成测试不在 SmokeIT 范围内启动 GreenMail（SMTP 3025），关闭 Spring Boot 自带的
+        // MailHealthIndicator，避免 /actuator/health 因 SMTP ping 失败回 503。具体 IT
+        // 用到邮件链路时再用 @ImportTestcontainers / @TestConfiguration 注入 GreenMail。
+        properties = "management.health.mail.enabled=false"
+)
 @ActiveProfiles("it")
 @Sql(scripts = "/cleanup-after-test.sql", executionPhase = Sql.ExecutionPhase.AFTER_TEST_METHOD)
 public abstract class IntegrationTestBase {
