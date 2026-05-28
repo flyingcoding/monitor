@@ -50,6 +50,22 @@ export const AUTH_STORAGE_KEY = 'authorize'
  * 1. docker-compose 全栈已启动（monitor-web nginx 监听 80，monitor-server 8001）
  * 2. account.password 已被 UPDATE 为 {@link ADMIN_BCRYPT_HASH}
  *
+ * <h3>诊断 CI 失败的关键改造</h3>
+ *
+ * PR4 第二轮 CI run（26555780399）所有 18 个 test 都 timeout 在
+ * {@code page.waitForURL('/index')}，原因是 Playwright 默认 waitUntil=load
+ * 对 Vue Router SPA history.pushState 不触发 load 事件。改用「监听 /api/auth/login
+ * 响应」+「判断 URL 已变化」双重信号，在 30s 内无响应或非 200 时立刻把后端 status
+ * + body 打到 console，方便 CI 日志定位是 RestBean.code != 200（密码不匹配 / 限流
+ * / 5xx）还是网络/前端问题。
+ *
+ * <h3>等待策略</h3>
+ *
+ * 1. {@link Page#waitForResponse}（先于 click 注册）拿到 POST /api/auth/login 实际响应
+ * 2. 解析 RestBean.code；非 200 抛 AssertionError 携带 status + body
+ * 3. {@link Page#waitForURL} 用 {@code waitUntil: 'commit'} 跳过 load 事件等待，
+ *    SPA 的 history.pushState 直接命中。
+ *
  * @param page Playwright Page
  */
 export async function loginAsAdmin(page: Page): Promise<void> {
@@ -64,12 +80,51 @@ export async function loginAsAdmin(page: Page): Promise<void> {
   await usernameInput.fill('admin')
   await passwordInput.fill(ADMIN_PASSWORD)
 
+  // 在 click 之前注册响应监听，避免 race（click 触发的请求可能已经飞出去）
+  const loginResponsePromise = page.waitForResponse(
+    (response) =>
+      response.url().includes('/api/auth/login') && response.request().method() === 'POST',
+    { timeout: 20_000 }
+  )
+
   // 点击 "立即登录"
   await page.getByRole('button', { name: '立即登录' }).click()
 
+  // 等后端响应回来
+  const loginResponse = await loginResponsePromise
+  const status = loginResponse.status()
+  let body: string
+  try {
+    body = await loginResponse.text()
+  } catch {
+    body = '<unable to read response body>'
+  }
+
+  // 后端返回 HTTP 200 + RestBean.code=200 视为登录成功；其他全部视为失败并 dump 上下文
+  if (status !== 200) {
+    throw new Error(
+      `登录请求失败 HTTP ${status} body=${body.slice(0, 500)}`
+    )
+  }
+  let parsed: { code?: number; message?: string; data?: unknown }
+  try {
+    parsed = JSON.parse(body)
+  } catch {
+    throw new Error(`登录响应不是合法 JSON，body=${body.slice(0, 500)}`)
+  }
+  if (parsed.code !== 200) {
+    throw new Error(
+      `登录失败 RestBean.code=${parsed.code} message=${parsed.message} body=${body.slice(0, 500)}`
+    )
+  }
+
   // 跳转到 /index/管理 tab（首次加载默认 manage）
-  // login() 成功 callback 调用 router.push('/index')，可能跳到 /index 或 /index/
-  await page.waitForURL((url) => url.pathname.startsWith('/index'), { timeout: 30_000 })
+  // SPA history.pushState 不触发 'load'；用 waitUntil: 'commit' 仅等 URL commit
+  // （不等 load event，因为 router.push 不会触发 load）
+  await page.waitForURL(/\/index/, {
+    timeout: 15_000,
+    waitUntil: 'commit'
+  })
 }
 
 /**
