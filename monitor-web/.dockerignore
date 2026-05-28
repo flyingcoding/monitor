@@ -1,0 +1,15 @@
+# v2.0-tests PR4：缩小 monitor-web Docker build 上下文
+# 避免 `COPY . .` 拉入 node_modules / dist / e2e 测试产物
+node_modules
+dist
+.git
+.github
+.idea
+.vscode
+e2e
+playwright-report
+test-results
+blob-report
+playwright/.cache
+coverage
+*.log

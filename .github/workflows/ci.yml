@@ -45,3 +45,171 @@ jobs:
         run: cd monitor-web && pnpm run check
       - name: Run tests
         run: cd monitor-web && pnpm run test -- --run
+
+  # v2.0-tests PR4：Playwright E2E 黄金路径 —— Chromium + Firefox + WebKit 三浏览器矩阵
+  # 启 docker-compose 全栈（mysql / redis / rabbitmq / influxdb / monitor-server / monitor-web）
+  # → docker exec mysql 重置 admin 密码到已知 BCrypt 哈希 → pnpm run e2e → 上传 report artifact
+  e2e:
+    runs-on: ubuntu-latest
+    needs: [server, web]
+    timeout-minutes: 25
+    env:
+      # 与 monitor-web/e2e/fixtures/admin.ts 中的 ADMIN_BCRYPT_HASH 同步
+      # 明文：e2e-admin-password-known，BCrypt rounds=10 prefix=$2a$
+      E2E_ADMIN_BCRYPT_HASH: '$2a$10$vDm1cOU6353vqUOaLXpG9uQZ3iIrI4FbfR1SOcn54gG08Jr0vEUzG'
+      # docker-compose monitor-web nginx 监听端口
+      E2E_BASE_URL: http://localhost:80
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+          cache-dependency-path: monitor-web/pnpm-lock.yaml
+
+      - name: Install monitor-web dependencies
+        run: cd monitor-web && pnpm install --frozen-lockfile
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        id: playwright-cache
+        with:
+          path: ~/.cache/ms-playwright
+          # @playwright/test 版本变更或 pnpm-lock.yaml hash 变更时失效
+          key: ${{ runner.os }}-playwright-${{ hashFiles('monitor-web/pnpm-lock.yaml') }}
+
+      - name: Install Playwright browsers
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: cd monitor-web && pnpm exec playwright install --with-deps
+
+      - name: Install Playwright browsers (deps only on cache hit)
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: cd monitor-web && pnpm exec playwright install-deps
+
+      - name: Prepare .env (test values only, never commit)
+        run: |
+          cp .env.example .env
+          # 用 Python 生成强随机密钥（与 scripts/generate-env.sh 等价但 inline 写）
+          MYSQL_ROOT_PWD=$(openssl rand -base64 18 | tr -d '/+=' | cut -c1-24)
+          MYSQL_USER_PWD=$(openssl rand -base64 18 | tr -d '/+=' | cut -c1-24)
+          REDIS_PWD=$(openssl rand -base64 18 | tr -d '/+=' | cut -c1-24)
+          RABBITMQ_PWD=$(openssl rand -base64 18 | tr -d '/+=' | cut -c1-24)
+          INFLUX_PWD=$(openssl rand -base64 18 | tr -d '/+=' | cut -c1-24)
+          JWT_K=$(openssl rand -base64 18 | tr -d '/+=' | cut -c1-24)
+          API_TOKEN_K=$(openssl rand -base64 32 | tr -d '\n')
+          sed -i "s|your_root_password|${MYSQL_ROOT_PWD}|g" .env
+          sed -i "s|your_mysql_password|${MYSQL_USER_PWD}|g" .env
+          sed -i "s|your_redis_password|${REDIS_PWD}|g" .env
+          sed -i "s|your_rabbitmq_password|${RABBITMQ_PWD}|g" .env
+          sed -i "s|your_influx_password|${INFLUX_PWD}|g" .env
+          sed -i "s|your_jwt_secret_key|${JWT_K}|g" .env
+          sed -i "s|your_api_token_hmac_key|${API_TOKEN_K}|g" .env
+          # 邮件占位（不真发邮件，e2e 不测告警通道）
+          sed -i "s|your_email@example.com|e2e@example.com|g" .env
+          sed -i "s|your_email_auth_code|e2e-dummy|g" .env
+
+      - name: Build and start docker-compose
+        run: |
+          docker compose build
+          # --wait 等所有 healthcheck 通过（mysql/redis/rabbitmq/influxdb/monitor-server）
+          # 默认 timeout 300s，足够冷启动 + Flyway migration
+          docker compose up -d --wait
+
+      - name: Reset admin password to known BCrypt hash
+        run: |
+          # 等 Flyway V1 执行完成并预置 admin 行（容器 healthcheck 通过即可保证 server 已 up）
+          set -e
+          MYSQL_ROOT_PWD=$(grep '^MYSQL_ROOT_PASSWORD=' .env | cut -d= -f2-)
+          # 重试 10 次，每次间隔 3s，应对偶发的 Flyway 慢启动 race
+          for attempt in 1 2 3 4 5 6 7 8 9 10; do
+            if docker compose exec -T mysql mysql -uroot -p"${MYSQL_ROOT_PWD}" monitor -e \
+              "UPDATE account SET password='${E2E_ADMIN_BCRYPT_HASH}' WHERE username='admin';" 2>/dev/null; then
+              echo "admin 密码重置成功（attempt=${attempt}）"
+              break
+            fi
+            echo "admin 密码重置失败（attempt=${attempt}），3 秒后重试..."
+            sleep 3
+            if [ "${attempt}" = "10" ]; then
+              echo "admin 密码重置最终失败，dump server logs:"
+              docker compose logs monitor-server | tail -100
+              exit 1
+            fi
+          done
+          # 验证：SELECT 出来的 password 应等于已知哈希
+          ACTUAL=$(docker compose exec -T mysql mysql -uroot -p"${MYSQL_ROOT_PWD}" monitor -N -e \
+            "SELECT password FROM account WHERE username='admin';")
+          if [ "${ACTUAL}" != "${E2E_ADMIN_BCRYPT_HASH}" ]; then
+            echo "admin 密码哈希校验失败 expected=${E2E_ADMIN_BCRYPT_HASH} actual=${ACTUAL}"
+            exit 1
+          fi
+
+      - name: Wait for monitor-web ready
+        run: |
+          # nginx 监听 80，等 / 返回 200
+          for i in {1..30}; do
+            if curl -fs http://localhost:80/ -o /dev/null; then
+              echo "monitor-web ready"
+              exit 0
+            fi
+            echo "monitor-web not ready yet (attempt ${i}/30)"
+            sleep 2
+          done
+          echo "monitor-web 启动超时，dump web logs:"
+          docker compose logs monitor-web | tail -50
+          exit 1
+
+      - name: Wait for monitor-server ready
+        run: |
+          # actuator/health 应回 200 + status=UP
+          for i in {1..30}; do
+            BODY=$(curl -fs http://localhost:8001/actuator/health 2>/dev/null || true)
+            if echo "${BODY}" | grep -q '"status":"UP"'; then
+              echo "monitor-server ready: ${BODY}"
+              exit 0
+            fi
+            echo "monitor-server not ready (attempt ${i}/30): ${BODY}"
+            sleep 2
+          done
+          echo "monitor-server 启动超时，dump server logs:"
+          docker compose logs monitor-server | tail -100
+          exit 1
+
+      - name: Run Playwright E2E
+        env:
+          CI: 'true'
+        run: cd monitor-web && pnpm run e2e
+
+      - name: Upload Playwright report (always)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: monitor-web/playwright-report/
+          retention-days: 7
+
+      - name: Upload Playwright test-results (failure only)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-test-results
+          path: monitor-web/test-results/
+          retention-days: 7
+
+      - name: Dump docker-compose logs on failure
+        if: failure()
+        run: |
+          echo "=== monitor-server logs ==="
+          docker compose logs monitor-server | tail -200 || true
+          echo "=== monitor-web logs ==="
+          docker compose logs monitor-web | tail -100 || true
+          echo "=== mysql logs ==="
+          docker compose logs mysql | tail -50 || true
+
+      - name: Tear down docker-compose
+        if: always()
+        run: docker compose down -v
