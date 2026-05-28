@@ -125,10 +125,22 @@ jobs:
           # 等 Flyway V1 执行完成并预置 admin 行（容器 healthcheck 通过即可保证 server 已 up）
           set -e
           MYSQL_ROOT_PWD=$(grep '^MYSQL_ROOT_PASSWORD=' .env | cut -d= -f2-)
-          # 重试 10 次，每次间隔 3s，应对偶发的 Flyway 慢启动 race
+
+          # PR4 第三轮诊断：用 python3 + bcrypt 在工作流运行时新生成 hash，避免 YAML 单引号 / GitHub env
+          # 注入 / bash $ 展开链中任何潜在的 escaping bug。明文密码与 admin.ts 中的 ADMIN_PASSWORD 一致。
+          # 安装 bcrypt（ubuntu-latest runner 自带 python3，但默认无 bcrypt 包）
+          python3 -m pip install --quiet bcrypt
+          FRESH_HASH=$(python3 -c "import bcrypt; print(bcrypt.hashpw(b'e2e-admin-password-known', bcrypt.gensalt(rounds=10, prefix=b'2a')).decode(), end='')")
+          echo "FRESH_HASH 长度=${#FRESH_HASH}"
+          # hex dump 检查 hash 字节，确保无尾随 CR/LF/空格
+          echo "FRESH_HASH hex dump:"
+          echo -n "${FRESH_HASH}" | xxd | head -5
+
+          # 通过 stdin 喂 SQL，避开 -e 的 shell escape 链（虽然 bash 看起来 ok 但多一层防御）
+          # 用 docker exec stdin 喂 SQL：MySQL 客户端 \n 终结 statement，无需引号匹配
           for attempt in 1 2 3 4 5 6 7 8 9 10; do
-            if docker compose exec -T mysql mysql -uroot -p"${MYSQL_ROOT_PWD}" monitor -e \
-              "UPDATE account SET password='${E2E_ADMIN_BCRYPT_HASH}' WHERE username='admin';" 2>/dev/null; then
+            if echo "UPDATE account SET password='${FRESH_HASH}' WHERE username='admin';" | \
+               docker compose exec -T mysql mysql -uroot -p"${MYSQL_ROOT_PWD}" monitor 2>/dev/null; then
               echo "admin 密码重置成功（attempt=${attempt}）"
               break
             fi
@@ -140,13 +152,39 @@ jobs:
               exit 1
             fi
           done
-          # 验证：SELECT 出来的 password 应等于已知哈希
-          ACTUAL=$(docker compose exec -T mysql mysql -uroot -p"${MYSQL_ROOT_PWD}" monitor -N -e \
-            "SELECT password FROM account WHERE username='admin';")
-          if [ "${ACTUAL}" != "${E2E_ADMIN_BCRYPT_HASH}" ]; then
-            echo "admin 密码哈希校验失败 expected=${E2E_ADMIN_BCRYPT_HASH} actual=${ACTUAL}"
+
+          # 验证：SELECT 出来的 password 应等于已知哈希（用 stdin 同样路径，避免 -e 差异）
+          ACTUAL=$(echo "SELECT password FROM account WHERE username='admin';" | \
+            docker compose exec -T mysql mysql -uroot -p"${MYSQL_ROOT_PWD}" monitor -N)
+          echo "DB ACTUAL 长度=${#ACTUAL}"
+          echo "DB ACTUAL hex dump:"
+          echo -n "${ACTUAL}" | xxd | head -5
+          if [ "${ACTUAL}" != "${FRESH_HASH}" ]; then
+            echo "admin 密码哈希校验失败 expected=${FRESH_HASH} actual=${ACTUAL}"
             exit 1
           fi
+          echo "admin 密码哈希校验成功"
+
+          # PR4 第三轮诊断：在 Playwright 跑之前，直接用 curl + 服务端真实 endpoint 自检登录链路。
+          # 若此处 401 → 完全不是 Playwright/前端的问题，是 server 拿不到正确 hash 或 BCrypt 校验
+          # 失败；若此处 200 → 问题在前端 form / nginx 转发 / SPA。
+          CURL_RESP=$(curl -s -X POST http://localhost:8001/api/auth/login \
+            -H 'Content-Type: application/x-www-form-urlencoded' \
+            --data-urlencode 'username=admin' \
+            --data-urlencode 'password=e2e-admin-password-known')
+          echo "curl 直登服务端响应: ${CURL_RESP}"
+          if ! echo "${CURL_RESP}" | grep -q '"code":200'; then
+            echo "curl 直登失败 - dump server logs:"
+            docker compose logs monitor-server | tail -200
+            # 再 dump 一次 DB 里的 hash 用 hex
+            echo "DB password 列 hex:"
+            echo "SELECT HEX(password) FROM account WHERE username='admin';" | \
+              docker compose exec -T mysql mysql -uroot -p"${MYSQL_ROOT_PWD}" monitor -N || true
+            exit 1
+          fi
+          echo "curl 直登服务端成功"
+          # 把 FRESH_HASH export 让后续步骤可读（写到 GITHUB_ENV，避免重新生成）
+          echo "FRESH_BCRYPT_HASH=${FRESH_HASH}" >> "$GITHUB_ENV"
 
       - name: Wait for monitor-web ready
         run: |
