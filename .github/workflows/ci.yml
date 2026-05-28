@@ -114,6 +114,17 @@ jobs:
           sed -i "s|your_email@example.com|e2e@example.com|g" .env
           sed -i "s|your_email_auth_code|e2e-dummy|g" .env
 
+          # v2.0-tests PR4 第四轮 hotfix：JWT 频率限制 prod 默认 base=10s 意味着同 user 10s 内
+          # 只能生成 1 个 JWT。e2e 跑 18 个 Playwright 测试每个都登录，30s 内必然触发 403
+          # "登录验证频繁，请稍后再试"。把 base/upgrade 调到 1/2，frequency 调到 10000
+          # （Redis 计数 TTL 极短 + 阈值永不可能触发 upgrade-block）让 e2e 跑得稳。
+          # 与 monitor-server/src/test/resources/application-it.yml 同策略。
+          {
+            echo "MONITOR_JWT_LIMIT_BASE=1"
+            echo "MONITOR_JWT_LIMIT_UPGRADE=2"
+            echo "MONITOR_JWT_LIMIT_FREQUENCY=10000"
+          } >> .env
+
       - name: Build and start docker-compose
         run: |
           docker compose build

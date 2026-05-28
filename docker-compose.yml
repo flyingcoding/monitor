@@ -109,6 +109,11 @@ services:
       SSH_ENCRYPT_KEY: ${SSH_ENCRYPT_KEY}
       MAIL_USERNAME: ${MAIL_USERNAME}
       MAIL_PASSWORD: ${MAIL_PASSWORD}
+      # v2.0-tests PR4：JWT 限流参数可被 .env 覆盖（e2e job 设为 1/2/10000 跑 Playwright，
+      # 正式生产保持默认 10/300/30 即受限）
+      MONITOR_JWT_LIMIT_BASE: ${MONITOR_JWT_LIMIT_BASE:-10}
+      MONITOR_JWT_LIMIT_UPGRADE: ${MONITOR_JWT_LIMIT_UPGRADE:-300}
+      MONITOR_JWT_LIMIT_FREQUENCY: ${MONITOR_JWT_LIMIT_FREQUENCY:-30}
     ports:
       - "8001:80"
     healthcheck:

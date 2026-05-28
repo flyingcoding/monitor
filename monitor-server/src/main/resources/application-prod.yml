@@ -66,10 +66,13 @@ spring:
     jwt:
       key: ${JWT_KEY}
       expire: 72
+      # v2.0-tests PR4 hotfix：JWT 频率限制提供 env 覆盖，让 e2e 把 base 设极低
+      # (e.g. 1s) 跑测试时不被限流，正式生产保持原值。Redis 计数 key 是按 userId，
+      # 同一个 admin 在 e2e job 30s 内会被 Playwright 触发 ~18 次登录。
       limit:
-        base: 10
-        upgrade: 300
-        frequency: 30
+        base: ${MONITOR_JWT_LIMIT_BASE:10}
+        upgrade: ${MONITOR_JWT_LIMIT_UPGRADE:300}
+        frequency: ${MONITOR_JWT_LIMIT_FREQUENCY:30}
     filter:
       order: -100
   web:
