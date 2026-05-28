@@ -1,9 +1,18 @@
 #生产环境配置
 server:
   port: 80
+# v2.0-tests PR4 hotfix：knife4j 4.5.0 的 Knife4jAutoConfiguration 在 prod 启动时仍尝试装配
+# knife4jOpenApiCustomizer(SpringDocConfigProperties)，但 springdoc.api-docs.enabled=false 让
+# SpringDocConfigProperties bean 不再产生 → UnsatisfiedDependencyException → APPLICATION FAILED TO START。
+# 全局 application.yml 默认 knife4j.enable=true 会传到所有 profile，prod 必须显式覆盖为 false。
+# 这是 docker-compose 全栈 e2e 第一次真正启动 prod jar 暴露的潜伏 bug（v1.0-v2.0-frontend-ux 六档
+# 都只跑 dev profile + mvn spring-boot:run，从未把 prod 容器跑通过）。
+# 业务影响：prod 不需要 Knife4j UI（Swagger 不应出现在生产环境），此改动 zero 业务回归。
 springdoc:
   api-docs:
     enabled: false
+knife4j:
+  enable: false
 mybatis-plus:
   configuration:
     log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
