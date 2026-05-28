@@ -147,3 +147,11 @@ management:
     web:
       exposure:
         include: health
+  # v2.0-tests PR4 hotfix：MailHealthIndicator 默认会调 SMTP testConnection。当 SMTP_HOST 不可达
+  # 或凭证错误时 /actuator/health 返回 503 → docker-compose healthcheck 永远失败 → e2e 卡死。
+  # 邮件不影响业务可用性（实际邮件链路是 RabbitMQ 异步发送，并非同步阻塞 API），所以从 health endpoint
+  # 摘掉它。真正的"邮件发送失败"应通过 MailQueueListener 的 ERROR 日志 / 队列 DLX 监控，而不是
+  # 让 health endpoint 把整个 server 标 503。可通过 MANAGEMENT_HEALTH_MAIL_ENABLED=true 重新启用。
+  health:
+    mail:
+      enabled: ${MANAGEMENT_HEALTH_MAIL_ENABLED:false}
