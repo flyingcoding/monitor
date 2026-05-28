@@ -25,22 +25,36 @@ import { type Page, expect } from '@playwright/test'
  * 不走 `/api/auth/login` POST 直登：要测 UI 行为本身（表单校验、router 跳转、Pinia 写入）。
  */
 
-/** E2E admin 明文密码，CI 在 docker-compose 启动后 UPDATE 到 `account.password`。 */
-export const ADMIN_PASSWORD = 'e2e-admin-password-known'
+/**
+ * E2E admin 明文密码，CI 在 docker-compose 启动后 UPDATE 到 `account.password`。
+ *
+ * **长度约束**：LoginPage.vue 的 el-input 设置 {@code maxlength="20"}，超过 20
+ * 字符的密码会被 Element Plus 截断（PR4 第三轮 CI 失败根因：旧值
+ * "e2e-admin-password-known" 长 24 字符 → 截断为前 20 字符 "e2e-admin-password-k"
+ * → BCrypt 校验失败 → 所有 Playwright 测试 401 Bad credentials）。这里固定使用
+ * 19 字符明文，留 1 字符余量。
+ *
+ * 验证：与 ci.yml 中 python3 bcrypt 现场生成 hash 时使用的明文必须完全一致。
+ */
+export const ADMIN_PASSWORD = 'e2e-admin-pwd-known'
 
 /**
- * BCrypt 哈希 for {@link ADMIN_PASSWORD}（rounds=10, prefix=$2a$）。
+ * BCrypt 哈希示例 for {@link ADMIN_PASSWORD}（rounds=10, prefix=$2a$）。
+ *
+ * <p><b>PR4 第三轮起 CI 不再使用此常量</b>：ci.yml 在 workflow 运行时用 python3
+ * 现场生成新 hash 写入 DB（避免 YAML 单引号 / GitHub env 注入 / bash $ 展开链
+ * 的任何潜伏 escape bug），所以前端 e2e 测试代码也不需要把固定 hash 与 CI 同步。
+ * 本常量仅作为「BCrypt 可校验性」的文档样例保留。
  *
  * 离线生成（Python 3 + bcrypt）：
  * ```bash
- * python3 -c "import bcrypt; print(bcrypt.hashpw(b'e2e-admin-password-known', bcrypt.gensalt(rounds=10, prefix=b'2a')).decode())"
+ * python3 -c "import bcrypt; print(bcrypt.hashpw(b'e2e-admin-pwd-known', bcrypt.gensalt(rounds=10, prefix=b'2a')).decode())"
  * ```
  *
- * 注：BCrypt 同密码每次生成的哈希不同（salt 不同），但都能 verify 通过。CI 用这个固定值
- * 通过 SQL UPDATE 写入数据库。
+ * 注：BCrypt 同密码每次生成的哈希不同（salt 不同），但都能 verify 通过。
  */
 export const ADMIN_BCRYPT_HASH =
-  '$2a$10$vDm1cOU6353vqUOaLXpG9uQZ3iIrI4FbfR1SOcn54gG08Jr0vEUzG'
+  '$2a$10$42MG/4naYZgiq7gzkijS0eGTmXSPF64tQyx7s9huO98qHKWx9/24a'
 
 /** localStorage 中 JWT 持久化 key，与 src/net/index.js authItemName 一致。 */
 export const AUTH_STORAGE_KEY = 'authorize'

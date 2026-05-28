@@ -54,10 +54,11 @@ jobs:
     needs: [server, web]
     timeout-minutes: 25
     env:
-      # 与 monitor-web/e2e/fixtures/admin.ts 中的 ADMIN_BCRYPT_HASH 同步
-      # 明文：e2e-admin-password-known，BCrypt rounds=10 prefix=$2a$
-      E2E_ADMIN_BCRYPT_HASH: '$2a$10$vDm1cOU6353vqUOaLXpG9uQZ3iIrI4FbfR1SOcn54gG08Jr0vEUzG'
-      # docker-compose monitor-web nginx 监听端口
+      # PR4 第三轮起：BCrypt hash 在 workflow 运行时用 python3 现场生成（避免任何
+      # YAML / GitHub env / bash $ 展开链中的 escape bug），不再固定在 env 中。
+      # 明文密码硬编码在 reset 步骤里，与 monitor-web/e2e/fixtures/admin.ts 的
+      # ADMIN_PASSWORD（'e2e-admin-pwd-known'，19 字符以适配 LoginPage el-input
+      # maxlength=20）必须保持一致。
       E2E_BASE_URL: http://localhost:80
     steps:
       - uses: actions/checkout@v4
@@ -128,9 +129,12 @@ jobs:
 
           # PR4 第三轮诊断：用 python3 + bcrypt 在工作流运行时新生成 hash，避免 YAML 单引号 / GitHub env
           # 注入 / bash $ 展开链中任何潜在的 escaping bug。明文密码与 admin.ts 中的 ADMIN_PASSWORD 一致。
+          # PR4 第四轮根因修复：明文从 'e2e-admin-password-known'（24 字符）改为 'e2e-admin-pwd-known'
+          # （19 字符）以适配 LoginPage.vue 的 el-input maxlength="20"。Element Plus 会截断 21+ 字符，
+          # 截断后 BCrypt 校验失败 → 401 Bad credentials → 所有 Playwright 测试 fail。
           # 安装 bcrypt（ubuntu-latest runner 自带 python3，但默认无 bcrypt 包）
           python3 -m pip install --quiet bcrypt
-          FRESH_HASH=$(python3 -c "import bcrypt; print(bcrypt.hashpw(b'e2e-admin-password-known', bcrypt.gensalt(rounds=10, prefix=b'2a')).decode(), end='')")
+          FRESH_HASH=$(python3 -c "import bcrypt; print(bcrypt.hashpw(b'e2e-admin-pwd-known', bcrypt.gensalt(rounds=10, prefix=b'2a')).decode(), end='')")
           echo "FRESH_HASH 长度=${#FRESH_HASH}"
           # hex dump 检查 hash 字节，确保无尾随 CR/LF/空格
           echo "FRESH_HASH hex dump:"
@@ -171,7 +175,7 @@ jobs:
           CURL_RESP=$(curl -s -X POST http://localhost:8001/api/auth/login \
             -H 'Content-Type: application/x-www-form-urlencoded' \
             --data-urlencode 'username=admin' \
-            --data-urlencode 'password=e2e-admin-password-known')
+            --data-urlencode 'password=e2e-admin-pwd-known')
           echo "curl 直登服务端响应: ${CURL_RESP}"
           if ! echo "${CURL_RESP}" | grep -q '"code":200'; then
             echo "curl 直登失败 - dump server logs:"
