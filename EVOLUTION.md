@@ -185,8 +185,8 @@
 | ❌ Server 单元测试 | 框架已就绪（JUnit 5 + Testcontainers），零实际测试 | **v1.3 启动**：Service 层核心逻辑 > 60% |
 | ❌ Client 单元测试 | 框架已就绪（JUnit 5），零实际测试 | **v1.3 启动**：MonitorUtils 指标采集 |
 | ⚠️ Web 单元测试 | Vitest 工具函数已有少量测试（2de6996） | **v1.3 扩展**：Pinia Store + 关键组件 |
-| ❌ 集成测试 | 无 | v2.0 引入 Testcontainers 跑数据库/Redis/MQ 集成 |
-| ❌ E2E 测试 | 无 | v2.0 使用 Playwright 覆盖登录、监控面板、终端核心流程 |
+| ✅ 集成测试 | **已完成**（v2.0-tests：15 个 Failsafe IT，单例 Testcontainers + `@ServiceConnection`） | — |
+| ✅ E2E 测试 | **已完成**（v2.0-tests：Playwright 三浏览器，登录 + 监控面板黄金路径） | 终端 / SFTP E2E 留 v2.0 终端档 |
 
 ### 性能优化
 
@@ -425,7 +425,8 @@ P2 (完成)     服务探测 → 进程监控 → GPU → SMART → systemd → 
 P3 (alpha 完成) OTLP 指标接收 + 时序 DB 适配层骨架                 [v2.0-alpha] ✅ 2026-05-18
 P3 (beta 完成)  VictoriaMetrics Provider 真实实现 + vmctl 迁移工具 [v2.0-beta] ✅ 2026-05-19
 P4 (frontend 完成) Dashboard 时间范围 + CSV 导出 + Notification 补齐 [v2.0-frontend-ux] ✅ 2026-05-20
-P4 (剩余)     Web 终端多 Tab + SFTP → 集成测试 → E2E + 性能优化     [v2.0]
+P4 (tests 完成) 集成测试（Testcontainers）+ E2E（Playwright 三浏览器） [v2.0-tests] ✅ 2026-06-01
+P4 (剩余)     Web 终端多 Tab + SFTP + 性能优化                       [v2.0]
 P5 (长期)     部署体验 → 性能优化 → 多租户                          [v3.0+]
 P6 (可选)     SaaS 模式 → 合规与审计                                [v3.0+]
 ```
@@ -464,7 +465,8 @@ P6 (可选)     SaaS 模式 → 合规与审计                                [
 2027 Q2  v2.0-alpha      OTLP 接收端点 + 时序 DB 适配层骨架                              ✅ 2026-05-18
 2027 Q3  v2.0-beta       VictoriaMetrics Provider + vmctl 迁移工具                       ✅ 2026-05-19
 2027 Q4  v2.0-frontend-ux Dashboard 时间范围 + CSV 导出 + Notification 补齐              ✅ 2026-05-20
-2027 Q4  v2.0            Web 终端多 Tab + SFTP + 集成测试 + E2E + 性能优化
+2027 Q4  v2.0-tests      集成测试（Testcontainers）+ E2E（Playwright 三浏览器）          ✅ 2026-06-01
+2027 Q4  v2.0            Web 终端多 Tab + SFTP + 性能优化
 2028+    v3.0+           部署体验 / 性能优化 / 多租户 / 可选 SaaS / 合规审计
 ```
 
@@ -645,6 +647,36 @@ JaCoCo verify 通过（`com.example.service.impl` LINE ≥ 60% 未回归）。
 - 告警 / 探测 / SMART / GPU / 进程历史的 CSV 导出
 - 30d 时间范围 / 全局 Dashboard 时间联动
 - SSE 时间范围回放
+
+
+### v2.0-tests 实施记录（2026-06-01）
+
+> 文档：`docs/v2.0-tests.md` / PRD：`.trellis/tasks/05-27-v2-0-integration-tests-and-e2e/prd.md`（D1–D8）
+
+**零 schema 变更**——v2.0-tests 是纯测试工程化，未新增 / 修改任何 MySQL 表或 measurement，业务代码也不动（仅 `prod` profile 关闭 Knife4j AutoConfiguration + 默认禁用 MailHealthIndicator 两处部署侧加固）。
+
+把测试金字塔从「404 单测 + 几乎零 @SpringBootTest」抬到「单测（Surefire）+ 集成（Failsafe + Testcontainers）+ E2E（Playwright）」三层。
+
+| 新增 / 改动 | 范围 |
+|------------|------|
+| `com.example.integration.IntegrationTestBase` | 单例 Testcontainers（MySQL/Redis/RabbitMQ via `@ServiceConnection` + InfluxDB via `@DynamicPropertySource`）+ `@SpringBootTest(RANDOM_PORT)` + `@DirtiesContext(BEFORE_CLASS)` + `@Sql` AFTER_TEST_METHOD 清表 + MySQL OOM 两层防御 |
+| `SmokeIT` / `ClientRuntimeIT` / `AlertFlowIT` / `ProbeFlowIT` | 3 条核心链路 IT（注册+runtime+InfluxDB+SSE / 告警+alert_history+RabbitMQ邮件 / 探测+probe_history+连续失败告警）+ 冒烟，共 15 个 Failsafe 测试（含既有 `DatabaseContainerIT`） |
+| `integration/support/{GreenMailSupport,WireMockSupport,AdminLoginSupport}` | GreenMail 拦 SMTP、WireMock 拦 webhook/钉钉/飞书 HTTP 出口、JWT 登录辅助 |
+| `monitor-server/pom.xml` | maven-failsafe-plugin 绑 `integration-test`/`verify`；Surefire 排除 `*IT.java`；test 依赖 +spring-boot-testcontainers / testcontainers(rabbitmq,influxdb) / testcontainers-redis / greenmail-junit5 / awaitility |
+| `monitor-web/playwright.config.ts` + `e2e/{auth.setup.ts,login.spec.ts,dashboard.spec.ts,fixtures/admin.ts}` | Playwright 三浏览器 + **storageState auth 复用模式**（setup project 登录一次，三浏览器 project 复用）；2 条黄金路径 = 19 个测试（1 setup + 6 唯一 × 3 浏览器） |
+| `.github/workflows/ci.yml` | server job 删 `services:` 块改 Testcontainers；新增 e2e job（`needs: [server, web]`，docker-compose 全栈 + python3 现场生成 BCrypt + curl 自检 + Playwright 三浏览器） |
+| `docs/v2.0-tests.md` | 三层结构 / 本地运行 / IT 与 E2E 设计 / 踩坑记录 / CI 拓扑 / 验收 |
+
+**8 项决策（D1–D8）**：D1 窄而深（Server 3 集成 + Web 2 E2E）/ D2 Surefire-Failsafe 分层 + Testcontainers `@ServiceConnection` / D3 E2E 走 docker-compose 全栈 / D4 测试代码 INSERT + `@Sql` 清表（admin 复用 V1）/ D5 保留容器 + 拦截真实第三方（GreenMail + WireMock）/ D6 三 job 并行+依赖 / D7 三浏览器矩阵 / D8 Playwright CI `retries:2`，Failsafe 不重试 + Awaitility 轮询异步。
+
+**测试覆盖**：
+- 后端 Failsafe 集成测试 **15 个**（SmokeIT 1 / ClientRuntimeIT 4 / AlertFlowIT 4 / ProbeFlowIT 5 / DatabaseContainerIT 1）全绿；Surefire 单测不回归（v2.0-frontend-ux 基线 404）；JaCoCo `com.example.service.impl` LINE ≥ 60% 不回归。
+- 前端 Playwright E2E **19 个**三浏览器（Chromium/Firefox/WebKit）全绿；Vitest 单测不回归。
+- CI server / web / e2e 三 job 全绿，e2e job ~4.5min。
+
+**关键偏离 vs 原 PRD**：原 PRD 未指定 E2E auth 复用方式，PR4 在 CI 实战中收敛出 **storageState 模式**——根因是后端 JWT 签发限流（`FlowUtils` 每用户每 `base` 秒只签 1 个 JWT，`frequency` 仅控升级不控拦截），「每测试 UI 登录」必然撞 403；storageState 登录一次复用把登录降到 ~7 次根治。配套修复链：SPA `waitUntil:'commit'`（pushState 不触发 load）、BCrypt 运行时生成、密码适配 `maxlength=20`、`getByText('记住我')` 绕开 Element Plus 隐藏 input、expire 断言对齐非 ISO 格式 `"yyyy-MM-dd HH:mm:ss.SSS"`（app 既有契约，未改后端）。
+
+**未做（明确 out-of-scope）**：重写既有单测；100% 覆盖率强制；OIDC/OTLP/VM provider 集成测试；SSH 终端 / SFTP E2E；告警/CSV/状态页/API Token E2E；后端 `AuthorizeVO.expire` 改 ISO 序列化（全 API Date 契约，独立任务）。
 
 
 ---
