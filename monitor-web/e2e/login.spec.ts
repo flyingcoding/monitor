@@ -45,11 +45,17 @@ test.describe('登录黄金路径', () => {
 
     // localStorage 已写入 authorize（{token, expire}）
     const auth = await readPersistedAuth(page)
-    expect(auth.expire, 'authorize.expire 应是 ISO 字符串').toMatch(
-      /^\d{4}-\d{2}-\d{2}T/
+    // 后端 AuthorizeVO.expire 序列化为 "yyyy-MM-dd HH:mm:ss.SSS"（空格分隔，非 ISO 带 T）。
+    // 这是 app 既有契约——src/net/index.js takeAccessToken 一直用 new Date(authObj.expire)
+    // 消费此格式。断言对齐真实格式，接受空格或 T 分隔。
+    expect(auth.expire, 'authorize.expire 应是时间戳字符串').toMatch(
+      /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}/
     )
-    // expire 必须晚于当前时间
-    expect(new Date(auth.expire).getTime()).toBeGreaterThan(Date.now())
+    // expire 必须晚于当前时间。空格分隔日期在 WebKit/Safari 下 new Date() 解析不可靠，
+    // 替换为 T 后再解析以保证三浏览器一致；并断言解析结果是合法日期。
+    const expireMs = new Date(auth.expire.replace(' ', 'T')).getTime()
+    expect(Number.isNaN(expireMs), 'expire 应能解析为合法日期').toBe(false)
+    expect(expireMs).toBeGreaterThan(Date.now())
 
     // 主面板渲染：管理 tab 默认激活，应能看到 "管理主机列表" 标题
     await expect(page.getByText('管理主机列表')).toBeVisible({ timeout: 15_000 })
