@@ -1,4 +1,5 @@
 import { defineConfig, devices } from '@playwright/test'
+import { STORAGE_STATE } from './e2e/fixtures/admin'
 
 /**
  * v2.0-tests PR4：Playwright E2E 配置。
@@ -14,6 +15,12 @@ import { defineConfig, devices } from '@playwright/test'
  * - **retries** (D8 决策)：CI 上 2 次重试容忍 docker-compose 启动尾期的 race，本地 0 重试避免掩盖真 bug。
  * - **fullyParallel: false + workers: 1**：docker-compose 后端状态（admin 行 / client 表 / SSE 订阅）
  *   在三浏览器之间共享，串行避免污染。
+ * - **storageState auth 复用**（Playwright 官方 auth 模式）：`setup` project 登录一次把
+ *   cookies + localStorage 落盘到 `e2e/.auth/admin.json`，三浏览器 project 通过
+ *   `dependencies: ['setup']` + `use.storageState` 复用，把真实登录次数从 ~15 次降到 ~7 次，
+ *   避开 JWT 签发限流（FlowUtils 每用户每 base 秒只签 1 个 JWT）。dashboard 测试天然拿到
+ *   localStorage 里的 JWT，无需自己登录；login.spec 用 `test.use({ storageState: { ... } })`
+ *   覆盖回登出态以测真实登录流程。
  * - **trace / screenshot / video on failure**：CI fail 时把 playwright-report 作为 artifact 上传，
  *   方便事后追踪。
  */
@@ -43,8 +50,24 @@ export default defineConfig({
     navigationTimeout: 30_000
   },
   projects: [
-    { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
-    { name: 'firefox', use: { ...devices['Desktop Firefox'] } },
-    { name: 'webkit', use: { ...devices['Desktop Safari'] } }
+    // 先跑 setup project：登录一次把 storageState（cookies + localStorage）写到
+    // e2e/.auth/admin.json。三浏览器 project dependencies: ['setup'] 复用它，避免
+    // 每个测试都真实登录撞 JWT 签发限流（FlowUtils 每用户每 base 秒只签 1 个）。
+    { name: 'setup', testMatch: /auth\.setup\.ts/ },
+    {
+      name: 'chromium',
+      use: { ...devices['Desktop Chrome'], storageState: STORAGE_STATE },
+      dependencies: ['setup']
+    },
+    {
+      name: 'firefox',
+      use: { ...devices['Desktop Firefox'], storageState: STORAGE_STATE },
+      dependencies: ['setup']
+    },
+    {
+      name: 'webkit',
+      use: { ...devices['Desktop Safari'], storageState: STORAGE_STATE },
+      dependencies: ['setup']
+    }
   ]
 })

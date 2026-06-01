@@ -1,12 +1,11 @@
 import { test, expect } from '@playwright/test'
-import { clearAuth, loginAsAdmin } from './fixtures/admin'
 
 /**
  * v2.0-tests PR4：监控面板黄金路径 E2E。
  *
  * <h3>覆盖链路</h3>
  *
- * 1. 复用 login fixture 登入 admin
+ * 1. 复用 storageState auth（playwright.config.ts 的 setup project 已登录并注入 localStorage JWT）
  * 2. Manage 页面通过 SSE `/api/sse/clients` 拉取客户端列表
  * 3. **空数据路径**（测试默认）：fresh docker-compose 启动，client 表无行 →
  *    主面板渲染 el-empty "当前无主机连接" 提示
@@ -28,9 +27,9 @@ import { clearAuth, loginAsAdmin } from './fixtures/admin'
 
 test.describe('监控面板黄金路径', () => {
   test.beforeEach(async ({ page }) => {
-    await page.goto('/')
-    await clearAuth(page)
-    await loginAsAdmin(page)
+    // storageState 已注入 localStorage JWT（setup project 登录产物），无需自己登录。
+    // 直达主面板；router 守卫读到未过期 token 后放行。
+    await page.goto('/index')
   })
 
   test('登录后管理主机列表渲染（空数据或有数据均算通过）', async ({ page }) => {

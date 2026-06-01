@@ -60,6 +60,20 @@ export const ADMIN_BCRYPT_HASH =
 export const AUTH_STORAGE_KEY = 'authorize'
 
 /**
+ * Playwright storageState 落盘路径（相对项目根，Playwright 会自动建父目录）。
+ *
+ * <p>auth.setup.ts 登录一次后把 BrowserContext storageState（cookies + localStorage）
+ * 写到这里；playwright.config.ts 的三浏览器 project 通过 {@code use.storageState}
+ * 复用，避免每个测试都真实登录撞 JWT 签发限流（FlowUtils 每用户每 base 秒只签 1 个）。
+ *
+ * <p><b>必须配合 remember=true</b>：storageState 只持久化 cookies + localStorage，
+ * 不存 sessionStorage，所以 setup 登录必须勾「记住我」让 token 进 localStorage 才能被捕获。
+ *
+ * <p>该文件含真实 JWT，已在 .gitignore 忽略 `e2e/.auth/`，不入库。
+ */
+export const STORAGE_STATE = 'e2e/.auth/admin.json'
+
+/**
  * UI 登录 admin 用户。调用前需保证：
  * 1. docker-compose 全栈已启动（monitor-web nginx 监听 80，monitor-server 8001）
  * 2. account.password 已被 UPDATE 为 {@link ADMIN_BCRYPT_HASH}
@@ -93,6 +107,17 @@ export async function loginAsAdmin(page: Page): Promise<void> {
 
   await usernameInput.fill('admin')
   await passwordInput.fill(ADMIN_PASSWORD)
+
+  // PR4 第四轮 hotfix：勾选「记住我」让前端 storeAccessToken 走 localStorage
+  // 而非 sessionStorage（src/net/index.js 的逻辑）。login.spec.ts 测试名明确是
+  // "持久化 JWT 到 localStorage"；不勾选 remember 时 sessionStorage 命中
+  // readPersistedAuth 找不到 authorize key → expect(raw).not.toBeNull() 报错。
+  //
+  // Element Plus el-checkbox 把原生 <input> 隐藏（opacity:0 / 可能 z-index:-1），
+  // .check() 打在隐藏 input 上会因 actionability/命不中而 flaky。点可见的 label 文本
+  // 切换 checkbox 最稳。默认未勾选，点一次即勾上。storageState 仅持久化 localStorage，
+  // 所以登录必须 remember=true 才能被 setup 捕获复用。
+  await page.getByText('记住我').click()
 
   // 在 click 之前注册响应监听，避免 race（click 触发的请求可能已经飞出去）
   const loginResponsePromise = page.waitForResponse(

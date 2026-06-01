@@ -26,6 +26,11 @@ import {
  */
 
 test.describe('登录黄金路径', () => {
+  // 覆盖 project 级 storageState：这组测试要验证真实登录流程，必须从登出态开始。
+  // 空 storageState（无 cookies / origins）等效未登录，否则 setup 注入的 JWT 会让
+  // beforeEach 一进 '/' 就被 router 守卫跳走 /index，"表单登录" 用例无从测起。
+  test.use({ storageState: { cookies: [], origins: [] } })
+
   test.beforeEach(async ({ page }) => {
     // 起点：保证未登录态。先访问根路径让 storage API 可用，再清掉历史 auth。
     await page.goto('/')

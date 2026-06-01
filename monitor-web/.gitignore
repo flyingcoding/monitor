@@ -22,6 +22,8 @@ coverage
 /test-results/
 /blob-report/
 /playwright/.cache/
+# storageState auth 复用产物（含真实 JWT，不入库）
+e2e/.auth/
 
 # Editor directories and files
 .vscode/*
