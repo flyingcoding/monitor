@@ -426,7 +426,8 @@ P3 (alpha 完成) OTLP 指标接收 + 时序 DB 适配层骨架                 
 P3 (beta 完成)  VictoriaMetrics Provider 真实实现 + vmctl 迁移工具 [v2.0-beta] ✅ 2026-05-19
 P4 (frontend 完成) Dashboard 时间范围 + CSV 导出 + Notification 补齐 [v2.0-frontend-ux] ✅ 2026-05-20
 P4 (tests 完成) 集成测试（Testcontainers）+ E2E（Playwright 三浏览器） [v2.0-tests] ✅ 2026-06-01
-P4 (剩余)     Web 终端多 Tab + SFTP + 性能优化                       [v2.0]
+P4 (terminal 完成) Web 终端多 Tab                                     [v2.0-terminal-tabs] ✅ 2026-06-02
+P4 (剩余)     SFTP + 性能优化                                          [v2.0]
 P5 (长期)     部署体验 → 性能优化 → 多租户                          [v3.0+]
 P6 (可选)     SaaS 模式 → 合规与审计                                [v3.0+]
 ```
@@ -466,7 +467,8 @@ P6 (可选)     SaaS 模式 → 合规与审计                                [
 2027 Q3  v2.0-beta       VictoriaMetrics Provider + vmctl 迁移工具                       ✅ 2026-05-19
 2027 Q4  v2.0-frontend-ux Dashboard 时间范围 + CSV 导出 + Notification 补齐              ✅ 2026-05-20
 2027 Q4  v2.0-tests      集成测试（Testcontainers）+ E2E（Playwright 三浏览器）          ✅ 2026-06-01
-2027 Q4  v2.0            Web 终端多 Tab + SFTP + 性能优化
+2027 Q4  v2.0-terminal-tabs Web 终端多 Tab                                               ✅ 2026-06-02
+2027 Q4  v2.0            SFTP + 性能优化
 2028+    v3.0+           部署体验 / 性能优化 / 多租户 / 可选 SaaS / 合规审计
 ```
 
@@ -677,6 +679,34 @@ JaCoCo verify 通过（`com.example.service.impl` LINE ≥ 60% 未回归）。
 **关键偏离 vs 原 PRD**：原 PRD 未指定 E2E auth 复用方式，PR4 在 CI 实战中收敛出 **storageState 模式**——根因是后端 JWT 签发限流（`FlowUtils` 每用户每 `base` 秒只签 1 个 JWT，`frequency` 仅控升级不控拦截），「每测试 UI 登录」必然撞 403；storageState 登录一次复用把登录降到 ~7 次根治。配套修复链：SPA `waitUntil:'commit'`（pushState 不触发 load）、BCrypt 运行时生成、密码适配 `maxlength=20`、`getByText('记住我')` 绕开 Element Plus 隐藏 input、expire 断言对齐非 ISO 格式 `"yyyy-MM-dd HH:mm:ss.SSS"`（app 既有契约，未改后端）。
 
 **未做（明确 out-of-scope）**：重写既有单测；100% 覆盖率强制；OIDC/OTLP/VM provider 集成测试；SSH 终端 / SFTP E2E；告警/CSV/状态页/API Token E2E；后端 `AuthorizeVO.expire` 改 ISO 序列化（全 API Date 契约，独立任务）。
+
+
+### v2.0-terminal-tabs 实施记录（2026-06-02）
+
+> PRD：`.trellis/tasks/06-02-v2-0-terminal-tabs/prd.md`
+
+**零 schema 变更 / 零后端协议变更**——本档只增强 Web 终端前端会话管理，不修改 `/terminal/{clientId}` WebSocket 消息格式、SSH 配置表或权限语义。
+
+| 新增 / 改动 | 范围 |
+|------------|------|
+| `monitor-web/src/component/TerminalWindow.vue` | 单终端状态 → 多 Tab 状态：`tabs[] + activeName`；每个 Tab 独立维护 SSH 配置、连接态、关闭和终端实例；重复从主机详情打开时聚焦已有主机 Tab |
+| `monitor-web/src/component/Terminal.vue` | 新增可选 `sessionId` prop；WebSocket URL 追加 `sessionId` query，保留只传 `id` 的旧调用方式 |
+| `monitor-web/src/views/tabs/Manage.vue` | `openKey` 触发键：重复点击同一主机也能让子组件重新聚焦对应 Tab |
+| `monitor-web/src/tools/terminal-tabs.js` | 终端 Tab 纯状态 helper：创建会话、计算关闭后激活项、计算同主机会话序号 |
+| `monitor-web/src/tools/__tests__/terminal-tabs.test.js` | 覆盖 Tab 创建、关闭激活选择、同主机会话序号 |
+
+**设计决策**：
+- 第一刀只做多 Tab 和会话状态管理，**不做 SFTP**；SFTP 需要独立 WebSocket、sshj SFTP 客户端、文件树、上传分片与错误恢复，单独任务风险更可控。
+- 不做后端 WebSocket 多路复用改造；现有 `/terminal/{clientId}` 已可通过多条 WebSocket 连接支撑同主机多 shell 与跨主机并行，前端用 Tab 管理多个独立连接。
+- `sessionId` 仅作为前端会话标识透传到 query，当前后端忽略；后续若补日志、SFTP 关联或审计，可以无破坏读取该字段。
+
+**测试覆盖**：前端 `pnpm run lint`、`pnpm run test -- --run`（16 files / 92 tests）和 `pnpm run build` 通过；build 仍保留既有 Vite 大 chunk warning，性能拆包留到 v2.0 性能档。
+
+**未做（明确 out-of-scope）**：
+- SFTP 文件树 / 上传下载 / 分片 / 断点续传
+- SSH 终端 E2E（WebSocket + xterm 自动化仍留后续档）
+- 后端终端审计 / 会话回放
+- Vite manualChunks / Web Worker 性能拆分
 
 
 ---

@@ -79,14 +79,21 @@ const clientList = computed(() => {
 })
 const refreshToken = () => get('/api/monitor/register', (token) => (register.token = token))
 
+/**
+ * 打开终端抽屉；openKey 确保重复点击同一主机时子组件也能重新聚焦对应 Tab。
+ *
+ * @param {number} id 主机 ID
+ */
 function openTerminal(id) {
   terminal.show = true
   terminal.id = id
+  terminal.openKey++
   detail.show = false
 }
 const terminal = reactive({
   show: false,
-  id: -1
+  id: -1,
+  openKey: 0
 })
 </script>
 
@@ -179,7 +186,7 @@ const terminal = reactive({
           </div>
         </div>
       </template>
-      <terminal-window :id="terminal.id" />
+      <terminal-window :id="terminal.id" :open-key="terminal.openKey" />
     </el-drawer>
   </div>
 </template>

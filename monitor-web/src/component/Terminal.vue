@@ -8,7 +8,11 @@ import { withQuery } from '@/net/query'
 import '@xterm/xterm/css/xterm.css'
 
 const props = defineProps({
-  id: Number
+  id: Number,
+  sessionId: {
+    type: String,
+    default: ''
+  }
 })
 const emits = defineEmits(['dispose'])
 const terminalRef = ref()
@@ -44,7 +48,10 @@ function buildTerminalSocketUrl() {
   }
   const wsBaseUrl = import.meta.env.VITE_WS_BASE_URL || `ws://${window.location.host}`
   const normalizedBaseUrl = wsBaseUrl.endsWith('/') ? wsBaseUrl.slice(0, -1) : wsBaseUrl
-  return withQuery(`${normalizedBaseUrl}/terminal/${props.id}`, { token })
+  return withQuery(`${normalizedBaseUrl}/terminal/${props.id}`, {
+    token,
+    sessionId: props.sessionId
+  })
 }
 
 /**
