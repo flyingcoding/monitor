@@ -8,6 +8,7 @@ import { Plus } from '@element-plus/icons-vue'
 import { useRoute } from 'vue-router'
 import { useStore } from '@/store'
 import TerminalWindow from '@/component/TerminalWindow.vue'
+import { createAuthenticatedEventSource, parseSseJson } from '@/net/sse'
 
 const locations = [
   { name: 'cn', desc: '中国大陆' },
@@ -24,13 +25,6 @@ const list = ref([])
 const loading = ref(true)
 const route = useRoute()
 
-// 获取 token 用于 SSE
-function getToken() {
-  const str = localStorage.getItem('authorize') || sessionStorage.getItem('authorize')
-  if (!str) return null
-  return JSON.parse(str).token
-}
-
 // SSE 订阅替代轮询
 let eventSource = null
 let sseRetryDelay = 1000
@@ -40,15 +34,15 @@ const SSE_MAX_DELAY = 60000
  * 建立主机列表SSE连接，并在断开时按指数退避策略重连。
  */
 function connectSSE() {
-  const token = getToken()
-  if (!token) {
+  eventSource = createAuthenticatedEventSource('/api/sse/clients')
+  if (!eventSource) {
     loading.value = false
     return
   }
-  const baseUrl = import.meta.env.VITE_API_BASE_URL || ''
-  eventSource = new EventSource(`${baseUrl}/api/sse/clients?token=${token}`)
   eventSource.addEventListener('clients', (event) => {
-    list.value = JSON.parse(event.data)
+    const data = parseSseJson(event)
+    if (!data) return
+    list.value = data
     loading.value = false
     sseRetryDelay = 1000
   })

@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { fetchSmartSnapshot } from '@/net/smart'
+import { createAuthenticatedEventSource, parseSseJson } from '@/net/sse'
 
 const props = defineProps({
   /** 客户端ID。 */
@@ -27,19 +28,6 @@ const smartAvailable = computed(() => {
   return cap.available === true
 })
 
-/**
- * 获取 token 用于 SSE 订阅。
- */
-function getToken() {
-  const str = localStorage.getItem('authorize') || sessionStorage.getItem('authorize')
-  if (!str) return null
-  try {
-    return JSON.parse(str).token
-  } catch (_e) {
-    return null
-  }
-}
-
 let smartEventSource = null
 let smartRetryDelay = 1000
 const SMART_SSE_MAX_DELAY = 60000
@@ -55,18 +43,14 @@ function connectSmartSSE(clientId) {
     smartEventSource = null
   }
   if (clientId === -1) return
-  const token = getToken()
-  if (!token) return
-  const baseUrl = import.meta.env.VITE_API_BASE_URL || ''
-  smartEventSource = new EventSource(`${baseUrl}/api/sse/smart/${clientId}?token=${token}`)
+  smartEventSource = createAuthenticatedEventSource(`/api/sse/smart/${clientId}`)
+  if (!smartEventSource) return
   smartEventSource.addEventListener('smart-snapshot', (event) => {
-    try {
-      snapshot.value = JSON.parse(event.data)
-      loading.value = false
-      smartRetryDelay = 1000
-    } catch (_e) {
-      // ignore parse error to keep stream alive
-    }
+    const data = parseSseJson(event)
+    if (!data) return
+    snapshot.value = data
+    loading.value = false
+    smartRetryDelay = 1000
   })
   smartEventSource.onerror = () => {
     if (smartEventSource) smartEventSource.close()

@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { getProcessSnapshot } from '@/net/process'
+import { createAuthenticatedEventSource, parseSseJson } from '@/net/sse'
 
 const props = defineProps({
   /** 主机ID；-1 表示尚未选中任何主机。 */
@@ -12,21 +13,6 @@ const snapshot = ref(null)
 let eventSource = null
 let retryDelay = 1000
 const MAX_RETRY_DELAY = 60000
-
-/**
- * 取登录 token，用于 SSE 鉴权。
- *
- * @returns {string | null}
- */
-function getToken() {
-  const str = localStorage.getItem('authorize') || sessionStorage.getItem('authorize')
-  if (!str) return null
-  try {
-    return JSON.parse(str).token
-  } catch (_e) {
-    return null
-  }
-}
 
 /**
  * 把字节数格式化为 MB / GB 字符串。
@@ -70,18 +56,14 @@ const missingCount = computed(() => watchedEntries.value.filter((entry) => !entr
 function connectSSE(clientId) {
   closeSSE()
   if (clientId === -1) return
-  const token = getToken()
-  if (!token) return
-  const baseUrl = import.meta.env.VITE_API_BASE_URL || ''
-  eventSource = new EventSource(`${baseUrl}/api/sse/process/${clientId}?token=${token}`)
+  eventSource = createAuthenticatedEventSource(`/api/sse/process/${clientId}`)
+  if (!eventSource) return
   eventSource.addEventListener('process-snapshot', (event) => {
-    try {
-      snapshot.value = JSON.parse(event.data)
-      loading.value = false
-      retryDelay = 1000
-    } catch (_e) {
-      // 数据解析异常仅打 debug，不打扰用户
-    }
+    const data = parseSseJson(event)
+    if (!data) return
+    snapshot.value = data
+    loading.value = false
+    retryDelay = 1000
   })
   eventSource.onerror = () => {
     closeSSE()

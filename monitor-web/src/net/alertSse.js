@@ -1,4 +1,4 @@
-import { takeAccessToken } from '@/net'
+import { createAuthenticatedEventSource, parseSseJson } from '@/net/sse'
 
 let alertEventSource = null
 let retryDelay = 1000
@@ -14,18 +14,13 @@ let manuallyClosed = false
 function connectAlertSse(onAlert) {
   if (typeof onAlert === 'function') alertHandler = onAlert
   if (alertEventSource) return
-  const token = takeAccessToken()
-  if (!token) return
   manuallyClosed = false
-  const baseUrl = import.meta.env.VITE_API_BASE_URL || ''
-  alertEventSource = new EventSource(`${baseUrl}/api/sse/alerts?token=${token}`)
+  alertEventSource = createAuthenticatedEventSource('/api/sse/alerts')
+  if (!alertEventSource) return
   alertEventSource.addEventListener('alert-fired', (event) => {
-    try {
-      const data = JSON.parse(event.data)
-      if (typeof alertHandler === 'function') alertHandler(data)
-    } catch (e) {
-      console.warn('告警事件解析失败', e)
-    }
+    const data = parseSseJson(event)
+    if (!data) return
+    if (typeof alertHandler === 'function') alertHandler(data)
     retryDelay = 1000
   })
   alertEventSource.onerror = () => {

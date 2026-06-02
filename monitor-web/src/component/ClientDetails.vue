@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { get, post } from '@/net'
+import { createAuthenticatedEventSource, parseSseJson } from '@/net/sse'
 import {
   copyIp,
   cpuNameToImage,
@@ -116,11 +117,17 @@ const submitNodeEdit = () => {
     }
   )
 }
+/**
+ * 重新加载主机详情并通知父组件刷新列表。
+ */
 function updateDetails() {
   props.update()
   init(props.id)
 }
 
+/**
+ * 删除当前主机，并在删除成功后通知父组件关闭详情。
+ */
 function deleteClient() {
   ElMessageBox.confirm('删除此主机后所有统计数据都将丢失，您确定要这样做吗？', '删除主机', {
     confirmButtonText: '确定',
@@ -135,13 +142,6 @@ function deleteClient() {
       })
     })
     .catch(() => {})
-}
-
-// 获取 token 用于 SSE
-function getToken() {
-  const str = localStorage.getItem('authorize') || sessionStorage.getItem('authorize')
-  if (!str) return null
-  return JSON.parse(str).token
 }
 
 // SSE 订阅替代轮询
@@ -160,12 +160,11 @@ function connectRuntimeSSE(clientId) {
     runtimeEventSource = null
   }
   if (clientId === -1) return
-  const token = getToken()
-  if (!token) return
-  const baseUrl = import.meta.env.VITE_API_BASE_URL || ''
-  runtimeEventSource = new EventSource(`${baseUrl}/api/sse/runtime/${clientId}?token=${token}`)
+  runtimeEventSource = createAuthenticatedEventSource(`/api/sse/runtime/${clientId}`)
+  if (!runtimeEventSource) return
   runtimeEventSource.addEventListener('runtime', (event) => {
-    const data = JSON.parse(event.data)
+    const data = parseSseJson(event)
+    if (!data) return
     // 仅在 1h 实时模式下拼接 SSE 增量；其他时段视图冻结，避免无限增长。
     // 历史窗口可能含 1k+ 点（7d step 10min），SSE 拼接会把列表迅速放大并扰乱聚合曲线语义。
     if (isLiveMode.value) {

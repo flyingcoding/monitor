@@ -6,12 +6,14 @@ import { nextTick } from 'vue'
 const netMock = vi.hoisted(() => ({
   get: vi.fn(),
   post: vi.fn(),
+  takeAccessToken: vi.fn(),
   historyRequests: []
 }))
 
 vi.mock('@/net', () => ({
   get: netMock.get,
-  post: netMock.post
+  post: netMock.post,
+  takeAccessToken: netMock.takeAccessToken
 }))
 
 const genericSlotStub = {
@@ -130,9 +132,11 @@ describe('ClientDetails.vue', () => {
   beforeEach(() => {
     netMock.get.mockReset()
     netMock.post.mockReset()
+    netMock.takeAccessToken.mockReset()
     netMock.historyRequests = []
     FakeEventSource.instances = []
     globalThis.EventSource = FakeEventSource
+    netMock.takeAccessToken.mockReturnValue('test-token')
     window.localStorage.setItem(
       'authorize',
       JSON.stringify({ token: 'test-token', expire: '2099-01-01T00:00:00Z' })

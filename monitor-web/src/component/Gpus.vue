@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { fetchGpuSnapshot } from '@/net/gpu'
+import { createAuthenticatedEventSource, parseSseJson } from '@/net/sse'
 
 const props = defineProps({
   /** 客户端ID。 */
@@ -27,19 +28,6 @@ const gpuAvailable = computed(() => {
   return cap.available === true
 })
 
-/**
- * 从 storage 读取 JWT，用于 SSE 鉴权。
- */
-function getToken() {
-  const str = localStorage.getItem('authorize') || sessionStorage.getItem('authorize')
-  if (!str) return null
-  try {
-    return JSON.parse(str).token
-  } catch (_e) {
-    return null
-  }
-}
-
 let gpuEventSource = null
 let gpuRetryDelay = 1000
 const GPU_SSE_MAX_DELAY = 60000
@@ -55,18 +43,14 @@ function connectGpuSSE(clientId) {
     gpuEventSource = null
   }
   if (clientId === -1) return
-  const token = getToken()
-  if (!token) return
-  const baseUrl = import.meta.env.VITE_API_BASE_URL || ''
-  gpuEventSource = new EventSource(`${baseUrl}/api/sse/gpu/${clientId}?token=${token}`)
+  gpuEventSource = createAuthenticatedEventSource(`/api/sse/gpu/${clientId}`)
+  if (!gpuEventSource) return
   gpuEventSource.addEventListener('gpu-snapshot', (event) => {
-    try {
-      snapshot.value = JSON.parse(event.data)
-      loading.value = false
-      gpuRetryDelay = 1000
-    } catch (_e) {
-      // ignore parse error
-    }
+    const data = parseSseJson(event)
+    if (!data) return
+    snapshot.value = data
+    loading.value = false
+    gpuRetryDelay = 1000
   })
   gpuEventSource.onerror = () => {
     if (gpuEventSource) gpuEventSource.close()

@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { getSystemdSnapshot } from '@/net/systemd'
+import { createAuthenticatedEventSource, parseSseJson } from '@/net/sse'
 
 const props = defineProps({
   /** 客户端 ID。 */
@@ -17,19 +18,6 @@ const loading = ref(true)
 let eventSource = null
 let retryDelay = 1000
 const MAX_RETRY_DELAY = 60000
-
-/**
- * 从 storage 读取 JWT，用于 SSE 鉴权。
- */
-function getToken() {
-  const str = localStorage.getItem('authorize') || sessionStorage.getItem('authorize')
-  if (!str) return null
-  try {
-    return JSON.parse(str).token
-  } catch (_e) {
-    return null
-  }
-}
 
 /**
  * 全量拉取一次最新 systemd 快照（首次加载或 SSE 重连前调用）。
@@ -67,21 +55,14 @@ function connectSse() {
     eventSource = null
   }
   if (!props.clientId || props.clientId === -1) return
-  const token = getToken()
-  if (!token) return
-  const baseUrl = import.meta.env.VITE_API_BASE_URL || ''
-  eventSource = new EventSource(
-    `${baseUrl}/api/sse/systemd/${props.clientId}?token=${token}`
-  )
+  eventSource = createAuthenticatedEventSource(`/api/sse/systemd/${props.clientId}`)
+  if (!eventSource) return
   eventSource.addEventListener('systemd-snapshot', (event) => {
-    try {
-      const data = JSON.parse(event.data)
-      units.value = data.units || []
-      updatedAt.value = data.updatedAt
-      retryDelay = 1000
-    } catch (_e) {
-      // 忽略反序列化失败
-    }
+    const data = parseSseJson(event)
+    if (!data) return
+    units.value = data.units || []
+    updatedAt.value = data.updatedAt
+    retryDelay = 1000
   })
   eventSource.onerror = () => {
     if (eventSource) eventSource.close()
