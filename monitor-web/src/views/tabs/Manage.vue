@@ -9,16 +9,7 @@ import { useRoute } from 'vue-router'
 import { useStore } from '@/store'
 import TerminalWindow from '@/component/TerminalWindow.vue'
 import { createReconnectingEventSource } from '@/net/sse'
-
-const locations = [
-  { name: 'cn', desc: '中国大陆' },
-  { name: 'hk', desc: '香港' },
-  { name: 'jp', desc: '日本' },
-  { name: 'us', desc: '美国' },
-  { name: 'sg', desc: '新加坡' },
-  { name: 'kr', desc: '韩国' },
-  { name: 'de', desc: '德国' }
-]
+import { SERVER_LOCATIONS as locations } from '@/tools/locations'
 
 const store = useStore()
 const list = ref([])

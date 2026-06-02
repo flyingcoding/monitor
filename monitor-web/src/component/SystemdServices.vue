@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { getSystemdSnapshot } from '@/net/systemd'
 import { createReconnectingEventSource } from '@/net/sse'
+import { formatUpdatedAt } from '@/tools/format'
 
 const props = defineProps({
   /** 客户端 ID。 */
@@ -107,14 +108,6 @@ function statusLabel(unit) {
   return unit.activeState || '未知'
 }
 
-function formatUpdatedAt(value) {
-  if (!value) return '尚未上报'
-  try {
-    return new Date(value).toLocaleString()
-  } catch (_e) {
-    return String(value)
-  }
-}
 </script>
 
 <template>

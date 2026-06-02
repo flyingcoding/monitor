@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { getProcessSnapshot } from '@/net/process'
 import { createReconnectingEventSource } from '@/net/sse'
+import { formatMemoryBytes, formatRatioPercent } from '@/tools/format'
 
 const props = defineProps({
   /** 主机ID；-1 表示尚未选中任何主机。 */
@@ -10,30 +11,6 @@ const props = defineProps({
 
 const loading = ref(true)
 const snapshot = ref(null)
-
-/**
- * 把字节数格式化为 MB / GB 字符串。
- *
- * @param {number} bytes
- * @returns {string}
- */
-function formatMemory(bytes) {
-  if (!bytes || bytes <= 0) return '0 MB'
-  const mb = bytes / 1024 / 1024
-  if (mb >= 1024) return `${(mb / 1024).toFixed(2)} GB`
-  return `${mb.toFixed(1)} MB`
-}
-
-/**
- * 把 0~1 的 CPU 占比格式化为百分比字符串。
- *
- * @param {number} value
- * @returns {string}
- */
-function formatPercent(value) {
-  if (value === null || value === undefined || Number.isNaN(value)) return '0.0%'
-  return `${(value * 100).toFixed(1)}%`
-}
 
 const cpuRows = computed(() => snapshot.value?.top10ByCpu || [])
 const memoryRows = computed(() => snapshot.value?.top10ByMemory || [])
@@ -137,10 +114,10 @@ onBeforeUnmount(() => {
         <el-table-column prop="name" label="进程" min-width="160" show-overflow-tooltip />
         <el-table-column prop="pid" label="PID" width="80" />
         <el-table-column label="CPU" width="100">
-          <template #default="{ row }">{{ formatPercent(row.cpuPercent) }}</template>
+          <template #default="{ row }">{{ formatRatioPercent(row.cpuPercent) }}</template>
         </el-table-column>
         <el-table-column label="内存" width="110">
-          <template #default="{ row }">{{ formatMemory(row.memoryBytes) }}</template>
+          <template #default="{ row }">{{ formatMemoryBytes(row.memoryBytes) }}</template>
         </el-table-column>
       </el-table>
 
@@ -153,10 +130,10 @@ onBeforeUnmount(() => {
         <el-table-column prop="name" label="进程" min-width="160" show-overflow-tooltip />
         <el-table-column prop="pid" label="PID" width="80" />
         <el-table-column label="内存" width="110">
-          <template #default="{ row }">{{ formatMemory(row.memoryBytes) }}</template>
+          <template #default="{ row }">{{ formatMemoryBytes(row.memoryBytes) }}</template>
         </el-table-column>
         <el-table-column label="CPU" width="100">
-          <template #default="{ row }">{{ formatPercent(row.cpuPercent) }}</template>
+          <template #default="{ row }">{{ formatRatioPercent(row.cpuPercent) }}</template>
         </el-table-column>
       </el-table>
     </template>

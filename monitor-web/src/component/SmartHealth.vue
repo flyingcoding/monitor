@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { fetchSmartSnapshot } from '@/net/smart'
 import { createReconnectingEventSource } from '@/net/sse'
+import { formatUpdatedAt, thresholdTagType } from '@/tools/format'
 
 const props = defineProps({
   /** 客户端ID。 */
@@ -18,6 +19,8 @@ const props = defineProps({
 
 const snapshot = ref(null)
 const loading = ref(true)
+const SMART_TEMP_DANGER = 70
+const SMART_TEMP_WARNING = 55
 
 /**
  * 客户端是否启用并可用 SMART 采集。
@@ -82,18 +85,6 @@ onBeforeUnmount(() => {
 
 const disks = computed(() => (snapshot.value && snapshot.value.disks) || [])
 
-/**
- * 选择温度的状态标签 type。
- *
- * @param {number} temp 温度
- * @returns {string} Element Plus tag type
- */
-function temperatureType(temp) {
-  if (temp == null) return 'info'
-  if (temp >= 70) return 'danger'
-  if (temp >= 55) return 'warning'
-  return 'success'
-}
 </script>
 
 <template>
@@ -124,7 +115,7 @@ function temperatureType(temp) {
               <template #default="{ row }">
                 <el-tag
                   v-if="row.temperatureCelsius != null"
-                  :type="temperatureType(row.temperatureCelsius)"
+                  :type="thresholdTagType(row.temperatureCelsius, SMART_TEMP_DANGER, SMART_TEMP_WARNING)"
                   size="small"
                 >
                   {{ row.temperatureCelsius }} °C
@@ -169,7 +160,7 @@ function temperatureType(temp) {
             </el-table-column>
           </el-table>
           <div v-if="snapshot && snapshot.updatedAt" class="smart-updated">
-            最近更新：{{ new Date(snapshot.updatedAt).toLocaleString() }}
+            最近更新：{{ formatUpdatedAt(snapshot.updatedAt) }}
           </div>
         </div>
       </template>

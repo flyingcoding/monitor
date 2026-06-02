@@ -18,16 +18,7 @@ import Processes from '@/component/Processes.vue'
 import SmartHealth from '@/component/SmartHealth.vue'
 import SystemdServices from '@/component/SystemdServices.vue'
 import { Connection, Delete, Download } from '@element-plus/icons-vue'
-
-const locations = [
-  { name: 'cn', desc: '中国大陆' },
-  { name: 'hk', desc: '香港' },
-  { name: 'jp', desc: '日本' },
-  { name: 'us', desc: '美国' },
-  { name: 'sg', desc: '新加坡' },
-  { name: 'kr', desc: '韩国' },
-  { name: 'de', desc: '德国' }
-]
+import { SERVER_LOCATIONS as locations } from '@/tools/locations'
 const props = defineProps({
   id: Number,
   update: Function

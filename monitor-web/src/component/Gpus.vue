@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { fetchGpuSnapshot } from '@/net/gpu'
 import { createReconnectingEventSource } from '@/net/sse'
+import { formatNumber, formatUpdatedAt, thresholdProgressStatus, thresholdTagType } from '@/tools/format'
 
 const props = defineProps({
   /** 客户端ID。 */
@@ -18,6 +19,10 @@ const props = defineProps({
 
 const snapshot = ref(null)
 const loading = ref(true)
+const GPU_TEMP_DANGER = 85
+const GPU_TEMP_WARNING = 75
+const GPU_UTIL_EXCEPTION = 90
+const GPU_UTIL_WARNING = 70
 
 /**
  * 客户端是否启用并可用 NVIDIA GPU 采集。
@@ -87,32 +92,6 @@ onBeforeUnmount(() => {
 const gpus = computed(() => (snapshot.value && snapshot.value.gpus) || [])
 
 /**
- * 根据温度返回 Element Plus 颜色类型。
- *
- * @param {number} temp 温度
- * @returns {string} type
- */
-function temperatureType(temp) {
-  if (temp == null) return 'info'
-  if (temp >= 85) return 'danger'
-  if (temp >= 75) return 'warning'
-  return 'success'
-}
-
-/**
- * 根据利用率返回 Element Plus 进度条 status。
- *
- * @param {number} percent 利用率（0~100）
- * @returns {string} status
- */
-function utilizationStatus(percent) {
-  if (percent == null) return ''
-  if (percent >= 90) return 'exception'
-  if (percent >= 70) return 'warning'
-  return 'success'
-}
-
-/**
  * 显存使用百分比；total 缺失或为 0 时返回 null。
  *
  * @param {object} gpu GPU 数据
@@ -124,20 +103,6 @@ function memoryPercent(gpu) {
   const total = gpu.memoryTotalMb
   if (used == null || total == null || total <= 0) return null
   return (used / total) * 100
-}
-
-function formatNumber(value, digits = 1) {
-  if (value == null) return '-'
-  return Number(value).toFixed(digits)
-}
-
-function formatUpdatedAt(value) {
-  if (!value) return '尚未上报'
-  try {
-    return new Date(value).toLocaleString()
-  } catch (_e) {
-    return String(value)
-  }
 }
 </script>
 
@@ -163,7 +128,7 @@ function formatUpdatedAt(value) {
                 </el-tag>
                 <el-tag
                   v-if="gpu.temperatureCelsius != null"
-                  :type="temperatureType(gpu.temperatureCelsius)"
+                  :type="thresholdTagType(gpu.temperatureCelsius, GPU_TEMP_DANGER, GPU_TEMP_WARNING)"
                   size="small"
                   effect="dark"
                 >
@@ -176,7 +141,13 @@ function formatUpdatedAt(value) {
                   <el-progress
                     v-if="gpu.utilizationPercent != null"
                     :percentage="Number(gpu.utilizationPercent)"
-                    :status="utilizationStatus(gpu.utilizationPercent)"
+                    :status="
+                      thresholdProgressStatus(
+                        gpu.utilizationPercent,
+                        GPU_UTIL_EXCEPTION,
+                        GPU_UTIL_WARNING
+                      )
+                    "
                     :stroke-width="14"
                   />
                   <span v-else class="metric-na">-</span>
