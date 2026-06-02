@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { fetchSmartSnapshot } from '@/net/smart'
-import { createAuthenticatedEventSource, parseSseJson } from '@/net/sse'
+import { createReconnectingEventSource } from '@/net/sse'
 
 const props = defineProps({
   /** 客户端ID。 */
@@ -28,42 +28,28 @@ const smartAvailable = computed(() => {
   return cap.available === true
 })
 
-let smartEventSource = null
-let smartRetryDelay = 1000
-const SMART_SSE_MAX_DELAY = 60000
-
-/**
- * 订阅指定主机 SMART 快照 SSE 事件，自动指数退避重连。
- *
- * @param {number} clientId 客户端ID
- */
-function connectSmartSSE(clientId) {
-  if (smartEventSource) {
-    smartEventSource.close()
-    smartEventSource = null
-  }
-  if (clientId === -1) return
-  smartEventSource = createAuthenticatedEventSource(`/api/sse/smart/${clientId}`)
-  if (!smartEventSource) return
-  smartEventSource.addEventListener('smart-snapshot', (event) => {
-    const data = parseSseJson(event)
-    if (!data) return
+const smartSse = createReconnectingEventSource({
+  path: () =>
+    props.clientId === -1 || !smartAvailable.value ? null : `/api/sse/smart/${props.clientId}`,
+  eventName: 'smart-snapshot',
+  shouldReconnect: () => props.clientId !== -1 && smartAvailable.value,
+  onMessage: (data) => {
     snapshot.value = data
     loading.value = false
-    smartRetryDelay = 1000
-  })
-  smartEventSource.onerror = () => {
-    if (smartEventSource) smartEventSource.close()
-    setTimeout(() => {
-      if (props.clientId !== -1) connectSmartSSE(props.clientId)
-    }, smartRetryDelay)
-    smartRetryDelay = Math.min(smartRetryDelay * 2, SMART_SSE_MAX_DELAY)
   }
+})
+
+/**
+ * 订阅当前主机 SMART 快照 SSE 事件，断开后由公共控制器自动指数退避重连。
+ */
+function connectSmartSSE() {
+  smartSse.connect()
 }
 
 function loadSnapshot(id) {
   if (id === -1 || !smartAvailable.value) {
     loading.value = false
+    smartSse.close()
     return
   }
   loading.value = true
@@ -78,24 +64,20 @@ function loadSnapshot(id) {
       loading.value = false
     }
   )
-  connectSmartSSE(id)
+  connectSmartSSE()
 }
 
 watch(() => props.clientId, loadSnapshot, { immediate: true })
 watch(smartAvailable, (value) => {
   if (value) {
     loadSnapshot(props.clientId)
-  } else if (smartEventSource) {
-    smartEventSource.close()
-    smartEventSource = null
+  } else {
+    smartSse.close()
   }
 })
 
 onBeforeUnmount(() => {
-  if (smartEventSource) {
-    smartEventSource.close()
-    smartEventSource = null
-  }
+  smartSse.close()
 })
 
 const disks = computed(() => (snapshot.value && snapshot.value.disks) || [])

@@ -8,7 +8,7 @@ import { Plus } from '@element-plus/icons-vue'
 import { useRoute } from 'vue-router'
 import { useStore } from '@/store'
 import TerminalWindow from '@/component/TerminalWindow.vue'
-import { createAuthenticatedEventSource, parseSseJson } from '@/net/sse'
+import { createReconnectingEventSource } from '@/net/sse'
 
 const locations = [
   { name: 'cn', desc: '中国大陆' },
@@ -25,35 +25,27 @@ const list = ref([])
 const loading = ref(true)
 const route = useRoute()
 
-// SSE 订阅替代轮询
-let eventSource = null
-let sseRetryDelay = 1000
-const SSE_MAX_DELAY = 60000
-
 /**
  * 建立主机列表SSE连接，并在断开时按指数退避策略重连。
  */
-function connectSSE() {
-  eventSource = createAuthenticatedEventSource('/api/sse/clients')
-  if (!eventSource) {
+const clientsSse = createReconnectingEventSource({
+  path: '/api/sse/clients',
+  eventName: 'clients',
+  shouldReconnect: () => route.name === 'manage',
+  onUnavailable: () => {
     loading.value = false
-    return
-  }
-  eventSource.addEventListener('clients', (event) => {
-    const data = parseSseJson(event)
-    if (!data) return
+  },
+  onMessage: (data) => {
     list.value = data
     loading.value = false
-    sseRetryDelay = 1000
-  })
-  eventSource.onerror = () => {
-    if (eventSource) eventSource.close()
+  },
+  onError: () => {
     if (!list.value.length) loading.value = false
-    setTimeout(() => {
-      if (route.name === 'manage') connectSSE()
-    }, sseRetryDelay)
-    sseRetryDelay = Math.min(sseRetryDelay * 2, SSE_MAX_DELAY)
   }
+})
+
+function connectSSE() {
+  clientsSse.connect()
 }
 
 // 手动更新（用于删除/重命名等操作后刷新）
@@ -70,10 +62,7 @@ const updateList = () => {
 connectSSE()
 
 onBeforeUnmount(() => {
-  if (eventSource) {
-    eventSource.close()
-    eventSource = null
-  }
+  clientsSse.close()
 })
 
 const register = reactive({

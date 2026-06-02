@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { getSystemdSnapshot } from '@/net/systemd'
-import { createAuthenticatedEventSource, parseSseJson } from '@/net/sse'
+import { createReconnectingEventSource } from '@/net/sse'
 
 const props = defineProps({
   /** 客户端 ID。 */
@@ -14,10 +14,6 @@ const props = defineProps({
 const units = ref([])
 const updatedAt = ref(null)
 const loading = ref(true)
-
-let eventSource = null
-let retryDelay = 1000
-const MAX_RETRY_DELAY = 60000
 
 /**
  * 全量拉取一次最新 systemd 快照（首次加载或 SSE 重连前调用）。
@@ -46,31 +42,22 @@ function reloadSnapshot() {
   )
 }
 
-/**
- * 订阅 systemd 快照 SSE 事件，断开后按指数退避自动重连。
- */
-function connectSse() {
-  if (eventSource) {
-    eventSource.close()
-    eventSource = null
-  }
-  if (!props.clientId || props.clientId === -1) return
-  eventSource = createAuthenticatedEventSource(`/api/sse/systemd/${props.clientId}`)
-  if (!eventSource) return
-  eventSource.addEventListener('systemd-snapshot', (event) => {
-    const data = parseSseJson(event)
-    if (!data) return
+const systemdSse = createReconnectingEventSource({
+  path: () =>
+    !props.clientId || props.clientId === -1 ? null : `/api/sse/systemd/${props.clientId}`,
+  eventName: 'systemd-snapshot',
+  shouldReconnect: () => !!props.clientId && props.clientId !== -1,
+  onMessage: (data) => {
     units.value = data.units || []
     updatedAt.value = data.updatedAt
-    retryDelay = 1000
-  })
-  eventSource.onerror = () => {
-    if (eventSource) eventSource.close()
-    setTimeout(() => {
-      if (props.clientId !== -1) connectSse()
-    }, retryDelay)
-    retryDelay = Math.min(retryDelay * 2, MAX_RETRY_DELAY)
   }
+})
+
+/**
+ * 订阅 systemd 快照 SSE 事件，断开后由公共控制器按指数退避自动重连。
+ */
+function connectSse() {
+  systemdSse.connect()
 }
 
 watch(
@@ -83,10 +70,7 @@ watch(
 )
 
 onBeforeUnmount(() => {
-  if (eventSource) {
-    eventSource.close()
-    eventSource = null
-  }
+  systemdSse.close()
 })
 
 /**

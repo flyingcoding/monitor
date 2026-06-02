@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { get, post } from '@/net'
-import { createAuthenticatedEventSource, parseSseJson } from '@/net/sse'
+import { createReconnectingEventSource } from '@/net/sse'
 import {
   copyIp,
   cpuNameToImage,
@@ -144,27 +144,11 @@ function deleteClient() {
     .catch(() => {})
 }
 
-// SSE 订阅替代轮询
-let runtimeEventSource = null
-let runtimeRetryDelay = 1000
-const RUNTIME_SSE_MAX_DELAY = 60000
-
-/**
- * 建立指定主机运行时SSE连接，并在断开时按指数退避策略重连。
- *
- * @param {number} clientId 主机ID
- */
-function connectRuntimeSSE(clientId) {
-  if (runtimeEventSource) {
-    runtimeEventSource.close()
-    runtimeEventSource = null
-  }
-  if (clientId === -1) return
-  runtimeEventSource = createAuthenticatedEventSource(`/api/sse/runtime/${clientId}`)
-  if (!runtimeEventSource) return
-  runtimeEventSource.addEventListener('runtime', (event) => {
-    const data = parseSseJson(event)
-    if (!data) return
+const runtimeSse = createReconnectingEventSource({
+  path: () => (props.id === -1 ? null : `/api/sse/runtime/${props.id}`),
+  eventName: 'runtime',
+  shouldReconnect: () => props.id !== -1,
+  onMessage: (data) => {
     // 仅在 1h 实时模式下拼接 SSE 增量；其他时段视图冻结，避免无限增长。
     // 历史窗口可能含 1k+ 点（7d step 10min），SSE 拼接会把列表迅速放大并扰乱聚合曲线语义。
     if (isLiveMode.value) {
@@ -172,22 +156,18 @@ function connectRuntimeSSE(clientId) {
       details.runtime.list.push(data)
     }
     runtimeLoading.value = false
-    runtimeRetryDelay = 1000
-  })
-  runtimeEventSource.onerror = () => {
-    if (runtimeEventSource) runtimeEventSource.close()
-    setTimeout(() => {
-      if (props.id !== -1) connectRuntimeSSE(props.id)
-    }, runtimeRetryDelay)
-    runtimeRetryDelay = Math.min(runtimeRetryDelay * 2, RUNTIME_SSE_MAX_DELAY)
   }
+})
+
+/**
+ * 建立指定主机运行时 SSE 连接，断开时由公共控制器按指数退避策略重连。
+ */
+function connectRuntimeSSE() {
+  runtimeSse.connect()
 }
 
 onBeforeUnmount(() => {
-  if (runtimeEventSource) {
-    runtimeEventSource.close()
-    runtimeEventSource = null
-  }
+  runtimeSse.close()
 })
 
 const now = computed(() => details.runtime.list[details.runtime.list.length - 1])
@@ -378,7 +358,7 @@ const init = (value) => {
     timeRange.custom = null
     customRange.value = null
     lastValidCustomRange = null
-    connectRuntimeSSE(value)
+    connectRuntimeSSE()
     get(`/api/monitor/details?clientId=${value}`, (data) => {
       Object.assign(details.base, data)
       baseLoading.value = false
@@ -389,10 +369,7 @@ const init = (value) => {
     historyRequestSeq++
     baseLoading.value = false
     runtimeLoading.value = false
-    if (runtimeEventSource) {
-      runtimeEventSource.close()
-      runtimeEventSource = null
-    }
+    runtimeSse.close()
   }
 }
 watch(() => props.id, init, { immediate: true })

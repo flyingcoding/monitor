@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { getProcessSnapshot } from '@/net/process'
-import { createAuthenticatedEventSource, parseSseJson } from '@/net/sse'
+import { createReconnectingEventSource } from '@/net/sse'
 
 const props = defineProps({
   /** 主机ID；-1 表示尚未选中任何主机。 */
@@ -10,9 +10,6 @@ const props = defineProps({
 
 const loading = ref(true)
 const snapshot = ref(null)
-let eventSource = null
-let retryDelay = 1000
-const MAX_RETRY_DELAY = 60000
 
 /**
  * 把字节数格式化为 MB / GB 字符串。
@@ -48,40 +45,25 @@ const watchedEntries = computed(() => {
 
 const missingCount = computed(() => watchedEntries.value.filter((entry) => !entry.hit).length)
 
-/**
- * 建立进程快照 SSE 订阅，断开时按指数退避重连。
- *
- * @param {number} clientId 主机ID
- */
-function connectSSE(clientId) {
-  closeSSE()
-  if (clientId === -1) return
-  eventSource = createAuthenticatedEventSource(`/api/sse/process/${clientId}`)
-  if (!eventSource) return
-  eventSource.addEventListener('process-snapshot', (event) => {
-    const data = parseSseJson(event)
-    if (!data) return
+const processSse = createReconnectingEventSource({
+  path: () => (props.clientId === -1 ? null : `/api/sse/process/${props.clientId}`),
+  eventName: 'process-snapshot',
+  shouldReconnect: () => props.clientId !== -1,
+  onMessage: (data) => {
     snapshot.value = data
     loading.value = false
-    retryDelay = 1000
-  })
-  eventSource.onerror = () => {
-    closeSSE()
-    setTimeout(() => {
-      if (props.clientId !== -1) connectSSE(props.clientId)
-    }, retryDelay)
-    retryDelay = Math.min(retryDelay * 2, MAX_RETRY_DELAY)
   }
-}
+})
 
 /**
- * 关闭 SSE 流。
+ * 建立进程快照 SSE 订阅，断开时由公共控制器按指数退避重连。
  */
+function connectSSE() {
+  processSse.connect()
+}
+
 function closeSSE() {
-  if (eventSource) {
-    eventSource.close()
-    eventSource = null
-  }
+  processSse.close()
 }
 
 /**
@@ -108,7 +90,7 @@ function refresh(clientId) {
       loading.value = false
     }
   )
-  connectSSE(clientId)
+  connectSSE()
 }
 
 watch(() => props.clientId, refresh, { immediate: true })

@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { fetchGpuSnapshot } from '@/net/gpu'
-import { createAuthenticatedEventSource, parseSseJson } from '@/net/sse'
+import { createReconnectingEventSource } from '@/net/sse'
 
 const props = defineProps({
   /** 客户端ID。 */
@@ -28,37 +28,21 @@ const gpuAvailable = computed(() => {
   return cap.available === true
 })
 
-let gpuEventSource = null
-let gpuRetryDelay = 1000
-const GPU_SSE_MAX_DELAY = 60000
-
-/**
- * 订阅指定主机 GPU 快照 SSE 事件，自动指数退避重连。
- *
- * @param {number} clientId 客户端ID
- */
-function connectGpuSSE(clientId) {
-  if (gpuEventSource) {
-    gpuEventSource.close()
-    gpuEventSource = null
-  }
-  if (clientId === -1) return
-  gpuEventSource = createAuthenticatedEventSource(`/api/sse/gpu/${clientId}`)
-  if (!gpuEventSource) return
-  gpuEventSource.addEventListener('gpu-snapshot', (event) => {
-    const data = parseSseJson(event)
-    if (!data) return
+const gpuSse = createReconnectingEventSource({
+  path: () => (props.clientId === -1 || !gpuAvailable.value ? null : `/api/sse/gpu/${props.clientId}`),
+  eventName: 'gpu-snapshot',
+  shouldReconnect: () => props.clientId !== -1 && gpuAvailable.value,
+  onMessage: (data) => {
     snapshot.value = data
     loading.value = false
-    gpuRetryDelay = 1000
-  })
-  gpuEventSource.onerror = () => {
-    if (gpuEventSource) gpuEventSource.close()
-    setTimeout(() => {
-      if (props.clientId !== -1) connectGpuSSE(props.clientId)
-    }, gpuRetryDelay)
-    gpuRetryDelay = Math.min(gpuRetryDelay * 2, GPU_SSE_MAX_DELAY)
   }
+})
+
+/**
+ * 订阅当前主机 GPU 快照 SSE 事件，断开后由公共控制器自动指数退避重连。
+ */
+function connectGpuSSE() {
+  gpuSse.connect()
 }
 
 /**
@@ -69,6 +53,7 @@ function connectGpuSSE(clientId) {
 function loadSnapshot(id) {
   if (id === -1 || !gpuAvailable.value) {
     loading.value = false
+    gpuSse.close()
     return
   }
   loading.value = true
@@ -83,24 +68,20 @@ function loadSnapshot(id) {
       loading.value = false
     }
   )
-  connectGpuSSE(id)
+  connectGpuSSE()
 }
 
 watch(() => props.clientId, loadSnapshot, { immediate: true })
 watch(gpuAvailable, (value) => {
   if (value) {
     loadSnapshot(props.clientId)
-  } else if (gpuEventSource) {
-    gpuEventSource.close()
-    gpuEventSource = null
+  } else {
+    gpuSse.close()
   }
 })
 
 onBeforeUnmount(() => {
-  if (gpuEventSource) {
-    gpuEventSource.close()
-    gpuEventSource = null
-  }
+  gpuSse.close()
 })
 
 const gpus = computed(() => (snapshot.value && snapshot.value.gpus) || [])

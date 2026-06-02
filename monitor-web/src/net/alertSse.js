@@ -1,10 +1,16 @@
-import { createAuthenticatedEventSource, parseSseJson } from '@/net/sse'
+import { createReconnectingEventSource } from '@/net/sse'
 
-let alertEventSource = null
-let retryDelay = 1000
-const MAX_DELAY = 60000
 let alertHandler = null
 let manuallyClosed = false
+
+const alertSse = createReconnectingEventSource({
+  path: '/api/sse/alerts',
+  eventName: 'alert-fired',
+  shouldReconnect: () => !manuallyClosed,
+  onMessage: (data) => {
+    if (typeof alertHandler === 'function') alertHandler(data)
+  }
+})
 
 /**
  * 建立告警事件 SSE 连接，断线时按指数退避自动重连，最大 60s 间隔。
@@ -13,27 +19,9 @@ let manuallyClosed = false
  */
 function connectAlertSse(onAlert) {
   if (typeof onAlert === 'function') alertHandler = onAlert
-  if (alertEventSource) return
+  if (alertSse.isActive()) return
   manuallyClosed = false
-  alertEventSource = createAuthenticatedEventSource('/api/sse/alerts')
-  if (!alertEventSource) return
-  alertEventSource.addEventListener('alert-fired', (event) => {
-    const data = parseSseJson(event)
-    if (!data) return
-    if (typeof alertHandler === 'function') alertHandler(data)
-    retryDelay = 1000
-  })
-  alertEventSource.onerror = () => {
-    if (alertEventSource) {
-      alertEventSource.close()
-      alertEventSource = null
-    }
-    if (manuallyClosed) return
-    setTimeout(() => {
-      if (!manuallyClosed) connectAlertSse(alertHandler)
-    }, retryDelay)
-    retryDelay = Math.min(retryDelay * 2, MAX_DELAY)
-  }
+  alertSse.connect()
 }
 
 /**
@@ -41,11 +29,7 @@ function connectAlertSse(onAlert) {
  */
 function closeAlertSse() {
   manuallyClosed = true
-  if (alertEventSource) {
-    alertEventSource.close()
-    alertEventSource = null
-  }
-  retryDelay = 1000
+  alertSse.close()
 }
 
 export { connectAlertSse, closeAlertSse }
