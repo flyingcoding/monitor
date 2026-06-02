@@ -4,6 +4,7 @@ import { ElMessage } from 'element-plus'
 import { AttachAddon } from '@xterm/addon-attach/src/AttachAddon'
 import { Terminal } from '@xterm/xterm'
 import { takeAccessToken } from '@/net'
+import { withQuery } from '@/net/query'
 import '@xterm/xterm/css/xterm.css'
 
 const props = defineProps({
@@ -43,7 +44,7 @@ function buildTerminalSocketUrl() {
   }
   const wsBaseUrl = import.meta.env.VITE_WS_BASE_URL || `ws://${window.location.host}`
   const normalizedBaseUrl = wsBaseUrl.endsWith('/') ? wsBaseUrl.slice(0, -1) : wsBaseUrl
-  return `${normalizedBaseUrl}/terminal/${props.id}?token=${encodeURIComponent(token)}`
+  return withQuery(`${normalizedBaseUrl}/terminal/${props.id}`, { token })
 }
 
 /**

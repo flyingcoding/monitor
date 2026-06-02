@@ -1,7 +1,8 @@
 <script setup>
-import { reactive, ref } from 'vue'
+import { onBeforeUnmount, reactive, ref } from 'vue'
 import { Delete, Lock, Plus, Refresh, Switch } from '@element-plus/icons-vue'
 import { get, logout, post } from '@/net'
+import { withQuery } from '@/net/query'
 import { ElMessage } from 'element-plus'
 import router from '@/router'
 import CreateSubAccount from '@/component/CreateSubAccount.vue'
@@ -10,6 +11,7 @@ import OidcBindings from '@/component/OidcBindings.vue'
 import OidcProviders from '@/component/OidcProviders.vue'
 import NotificationPreference from '@/component/NotificationPreference.vue'
 import { useStore } from '@/store'
+import { createEmailCodeRequester } from '@/tools/verification-code'
 
 const store = useStore()
 
@@ -40,30 +42,17 @@ const emailForm = reactive({
 
 const coldTime = ref(0)
 const isEmailValid = ref(true)
+const emailCodeRequester = createEmailCodeRequester({ cooldownRef: coldTime })
 
 const onEmailValidate = (prop, isValid) => {
   if (prop === 'email') isEmailValid.value = isValid
 }
 
-const validateEmail = () => {
-  coldTime.value = 60
-  let handle
-  get(
-    `/api/auth/ask-code?email=${emailForm.email}&type=modify`,
-    () => {
-      ElMessage.success(`验证码已发送到邮箱: ${emailForm.email}，请注意查收`)
-      handle = setInterval(() => {
-        coldTime.value--
-        if (coldTime.value === 0) {
-          clearInterval(handle)
-        }
-      }, 1000)
-    },
-    (message) => {
-      ElMessage.warning(message)
-      coldTime.value = 0
-    }
-  )
+/**
+ * 发送邮箱修改验证码，并在成功后启动倒计时。
+ */
+function validateEmail() {
+  emailCodeRequester.request(emailForm.email, 'modify')
 }
 
 function modifyEmail() {
@@ -127,11 +116,15 @@ function handleCreateAccount() {
 }
 
 function deleteAccount(id) {
-  get(`/api/user/sub/delete?uid=${id}`, () => {
+  get(withQuery('/api/user/sub/delete', { uid: id }), () => {
     ElMessage.success('子账户删除成功')
     initSubAccounts()
   })
 }
+
+onBeforeUnmount(() => {
+  emailCodeRequester.dispose()
+})
 </script>
 
 <template>

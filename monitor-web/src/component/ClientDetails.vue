@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { get, post } from '@/net'
+import { withQuery } from '@/net/query'
 import { createReconnectingEventSource } from '@/net/sse'
 import {
   copyIp,
@@ -126,7 +127,7 @@ function deleteClient() {
     type: 'warning'
   })
     .then(() => {
-      get(`/api/monitor/delete?clientId=${props.id}`, () => {
+      get(withQuery('/api/monitor/delete', { clientId: props.id }), () => {
         emits('delete')
         props.update()
         ElMessage.success('主机已成功移除')
@@ -220,12 +221,12 @@ function loadHistory() {
   runtimeLoading.value = true
   details.runtime = { list: [] }
   const range = resolveQueryRange()
-  const params = new URLSearchParams({ clientId: String(props.id) })
+  const params = { clientId: props.id }
   if (range) {
-    params.set('from', range.from)
-    params.set('to', range.to)
+    params.from = range.from
+    params.to = range.to
   }
-  get(`/api/monitor/runtime_history?${params.toString()}`, (data) => {
+  get(withQuery('/api/monitor/runtime_history', params), (data) => {
     if (requestSeq !== historyRequestSeq) return
     Object.assign(details.runtime, data)
     runtimeLoading.value = false
@@ -350,7 +351,7 @@ const init = (value) => {
     customRange.value = null
     lastValidCustomRange = null
     connectRuntimeSSE()
-    get(`/api/monitor/details?clientId=${value}`, (data) => {
+    get(withQuery('/api/monitor/details', { clientId: value }), (data) => {
       Object.assign(details.base, data)
       baseLoading.value = false
     })

@@ -23,13 +23,41 @@ const defaultFailure = (message, status, url) => {
 const silentFailure = () => {}
 
 /**
+ * 解析后端返回的令牌过期时间；兼容 Java Date 默认序列化的空格分隔格式。
+ *
+ * @param {string} expire 过期时间字符串
+ * @returns {Date} 解析后的日期
+ */
+function parseAccessTokenExpire(expire) {
+  const direct = new Date(expire)
+  if (!Number.isNaN(direct.getTime())) return direct
+  if (typeof expire !== 'string') return direct
+  return new Date(expire.replace(' ', 'T'))
+}
+
+/**
  * 获取并校验当前登录访问令牌。
  */
 function takeAccessToken() {
   const str = localStorage.getItem(authItemName) || sessionStorage.getItem(authItemName)
   if (!str) return null
-  const authObj = JSON.parse(str)
-  if (new Date(authObj.expire) <= new Date()) {
+  let authObj
+  try {
+    authObj = JSON.parse(str)
+  } catch (_e) {
+    deleteAccessToken()
+    return null
+  }
+  if (!authObj || !authObj.token || !authObj.expire) {
+    deleteAccessToken()
+    return null
+  }
+  const expireAt = parseAccessTokenExpire(authObj.expire)
+  if (Number.isNaN(expireAt.getTime())) {
+    deleteAccessToken()
+    return null
+  }
+  if (expireAt <= new Date()) {
     deleteAccessToken()
     ElMessage.warning('登录状态已过期，请重新登录！')
     return null
@@ -37,14 +65,26 @@ function takeAccessToken() {
   return authObj.token
 }
 
+/**
+ * 按登录持久化偏好保存访问令牌；remember=true 写 localStorage，否则写 sessionStorage。
+ *
+ * @param {boolean} remember 是否持久保存登录态
+ * @param {string} token JWT 访问令牌
+ * @param {string} expire 过期时间字符串
+ */
 function storeAccessToken(remember, token, expire) {
   const authObj = {
     token: token,
     expire: expire
   }
   const str = JSON.stringify(authObj)
-  if (remember) localStorage.setItem(authItemName, str)
-  else sessionStorage.setItem(authItemName, str)
+  if (remember) {
+    sessionStorage.removeItem(authItemName)
+    localStorage.setItem(authItemName, str)
+  } else {
+    localStorage.removeItem(authItemName)
+    sessionStorage.setItem(authItemName, str)
+  }
 }
 
 function deleteAccessToken() {
@@ -223,4 +263,16 @@ function unauthorized() {
   return !takeAccessToken()
 }
 
-export { post, put, del, get, publicGet, login, logout, unauthorized, takeAccessToken, fetchSelf }
+export {
+  post,
+  put,
+  del,
+  get,
+  publicGet,
+  login,
+  logout,
+  unauthorized,
+  takeAccessToken,
+  storeAccessToken,
+  fetchSelf
+}

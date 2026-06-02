@@ -1,4 +1,5 @@
 import { get } from '@/net'
+import { withQuery } from '@/net/query'
 
 /**
  * v1.3：客户端 systemd unit 状态查询。
@@ -15,7 +16,7 @@ import { get } from '@/net'
  * @param {Function} [failure] 失败回调
  */
 function getSystemdSnapshot(clientId, success, failure) {
-  return get(`/api/monitor/systemd?clientId=${clientId}`, success, failure)
+  return get(withQuery('/api/monitor/systemd', { clientId }), success, failure)
 }
 
 export { getSystemdSnapshot }

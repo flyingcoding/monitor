@@ -12,6 +12,7 @@ import {
   updateProbe
 } from '@/net/probe'
 import { listChannels } from '@/net/alert'
+import { submitEnabledToggle } from '@/tools/toggle'
 
 defineOptions({ name: 'Probes' })
 
@@ -310,16 +311,10 @@ function toggleEnabled(row) {
     channelIds: Array.isArray(row.channelIds) ? [...row.channelIds] : [],
     enabled: row.enabled
   }
-  updateProbe(
-    row.id,
-    payload,
-    () => {
-      ElMessage.success(row.enabled ? '已启用' : '已禁用')
-    },
-    () => {
-      row.enabled = !row.enabled
-    }
-  )
+  submitEnabledToggle({
+    row,
+    update: (success, failure) => updateProbe(row.id, payload, success, failure)
+  })
 }
 
 /**

@@ -8,6 +8,7 @@ import {
   listProviders,
   updateProvider
 } from '@/net/oidc'
+import { submitEnabledToggle } from '@/tools/toggle'
 
 const loading = ref(false)
 const providers = ref([])
@@ -176,16 +177,10 @@ function toggleEnabled(row) {
     scopes: row.scopes,
     enabled: row.enabled
   }
-  updateProvider(
-    row.id,
-    payload,
-    () => {
-      ElMessage.success(row.enabled ? '已启用' : '已禁用')
-    },
-    () => {
-      row.enabled = !row.enabled
-    }
-  )
+  submitEnabledToggle({
+    row,
+    update: (success, failure) => updateProvider(row.id, payload, success, failure)
+  })
 }
 
 onMounted(() => {

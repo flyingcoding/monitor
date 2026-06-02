@@ -1,4 +1,5 @@
 import { get, post, put, del } from '@/net'
+import { withQuery } from '@/net/query'
 
 // ============ 告警规则 ============
 const listAlertRules = (success, failure) => get('/api/alert/rule', success, failure)
@@ -9,7 +10,7 @@ const updateAlertRule = (id, payload, success, failure) =>
   put(`/api/alert/rule/${id}`, payload, success, failure)
 const deleteAlertRule = (id, success, failure) => del(`/api/alert/rule/${id}`, success, failure)
 const silenceAlertRule = (id, minutes, success, failure) =>
-  post(`/api/alert/rule/${id}/silence?minutes=${minutes}`, {}, success, failure)
+  post(withQuery(`/api/alert/rule/${id}/silence`, { minutes }), {}, success, failure)
 
 // ============ 告警历史 ============
 /**
@@ -20,11 +21,7 @@ const silenceAlertRule = (id, minutes, success, failure) =>
  * @param {Function} failure 失败回调
  */
 function listAlertHistory(params, success, failure) {
-  const query = Object.entries(params)
-    .filter(([_, v]) => v !== '' && v !== null && v !== undefined)
-    .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
-    .join('&')
-  get(`/api/alert/history${query ? `?${query}` : ''}`, success, failure)
+  get(withQuery('/api/alert/history', params), success, failure)
 }
 const getAlertHistory = (id, success, failure) =>
   get(`/api/alert/history/${id}`, success, failure)

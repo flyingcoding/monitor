@@ -1,4 +1,5 @@
 import { takeAccessToken } from '@/net'
+import { withQuery } from '@/net/query'
 
 const DEFAULT_RETRY_DELAY = 1000
 const DEFAULT_MAX_RETRY_DELAY = 60000
@@ -13,8 +14,7 @@ function createAuthenticatedEventSource(path) {
   const token = takeAccessToken()
   if (!token) return null
   const baseUrl = import.meta.env.VITE_API_BASE_URL || ''
-  const separator = path.includes('?') ? '&' : '?'
-  return new EventSource(`${baseUrl}${path}${separator}token=${encodeURIComponent(token)}`)
+  return new EventSource(withQuery(`${baseUrl}${path}`, { token }))
 }
 
 /**

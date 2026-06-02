@@ -1,4 +1,5 @@
 import { get } from '@/net'
+import { withQuery } from '@/net/query'
 
 /**
  * 加载指定客户端的最新 SMART 磁盘健康快照。
@@ -8,5 +9,5 @@ import { get } from '@/net'
  * @param {Function} [failure] 失败回调
  */
 export function fetchSmartSnapshot(clientId, success, failure) {
-  get(`/api/monitor/smart?clientId=${clientId}`, success, failure)
+  get(withQuery('/api/monitor/smart', { clientId }), success, failure)
 }

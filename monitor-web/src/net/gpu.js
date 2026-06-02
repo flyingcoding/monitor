@@ -1,4 +1,5 @@
 import { get } from '@/net'
+import { withQuery } from '@/net/query'
 
 /**
  * 加载指定客户端的最新 NVIDIA GPU 快照。
@@ -8,5 +9,5 @@ import { get } from '@/net'
  * @param {Function} [failure] 失败回调
  */
 export function fetchGpuSnapshot(clientId, success, failure) {
-  get(`/api/monitor/gpu?clientId=${clientId}`, success, failure)
+  get(withQuery('/api/monitor/gpu', { clientId }), success, failure)
 }

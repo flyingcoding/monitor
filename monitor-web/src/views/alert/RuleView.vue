@@ -19,6 +19,7 @@ import {
   metricMeta,
   operatorMeta
 } from '@/tools/alert'
+import { submitEnabledToggle } from '@/tools/toggle'
 
 const loading = ref(false)
 const rules = ref([])
@@ -230,17 +231,10 @@ function toggleEnabled(row) {
     enabled: row.enabled,
     channelIds: Array.isArray(row.channelIds) ? [...row.channelIds] : []
   }
-  updateAlertRule(
-    row.id,
-    payload,
-    () => {
-      ElMessage.success(row.enabled ? '已启用' : '已禁用')
-    },
-    () => {
-      // 失败时回滚
-      row.enabled = !row.enabled
-    }
-  )
+  submitEnabledToggle({
+    row,
+    update: (success, failure) => updateAlertRule(row.id, payload, success, failure)
+  })
 }
 
 /**

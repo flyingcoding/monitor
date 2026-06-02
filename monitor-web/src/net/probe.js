@@ -1,4 +1,5 @@
 import { get, post, put, del } from '@/net'
+import { withQuery } from '@/net/query'
 
 // ============ 探测任务 CRUD ============
 const listProbes = (success, failure) => get('/api/probes', success, failure)
@@ -18,11 +19,7 @@ const deleteProbe = (id, success, failure) =>
  * @param {Function} failure 失败回调
  */
 function listProbeHistory(id, params, success, failure) {
-  const query = Object.entries(params || {})
-    .filter(([, v]) => v !== '' && v !== null && v !== undefined)
-    .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
-    .join('&')
-  get(`/api/probes/${id}/history${query ? `?${query}` : ''}`, success, failure)
+  get(withQuery(`/api/probes/${id}/history`, params), success, failure)
 }
 
 /** 探测类型元数据。 */

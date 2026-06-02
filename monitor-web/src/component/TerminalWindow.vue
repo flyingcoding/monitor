@@ -1,6 +1,7 @@
 <script setup>
 import { reactive, ref, watch } from 'vue'
 import { get, post } from '@/net'
+import { withQuery } from '@/net/query'
 import Terminal from '@/component/Terminal.vue'
 
 const props = defineProps({
@@ -43,7 +44,7 @@ watch(
   (id) => {
     state.value = 1
     if (id !== -1) {
-      get(`/api/monitor/ssh?clientId=${id}`, (data) => Object.assign(connection, data))
+      get(withQuery('/api/monitor/ssh', { clientId: id }), (data) => Object.assign(connection, data))
     }
   },
   { immediate: true }

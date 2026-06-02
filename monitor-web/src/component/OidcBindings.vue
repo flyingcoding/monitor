@@ -8,6 +8,7 @@ import {
   listPublicProviders,
   unbindProvider
 } from '@/net/oidc'
+import { withQuery } from '@/net/query'
 
 const bindings = ref([])
 const availableProviders = ref([])
@@ -57,7 +58,7 @@ function bindNew(providerName) {
         return
       }
       const encoded = encodeURIComponent(providerName)
-      window.location.href = `/api/oidc/bindings/start/${encoded}?intentToken=${encodeURIComponent(intent)}`
+      window.location.href = withQuery(`/api/oidc/bindings/start/${encoded}`, { intentToken: intent })
     },
     () => {
       // issueBindingIntent 内部已经通过 ElMessage 提示了错误

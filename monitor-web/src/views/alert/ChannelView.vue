@@ -10,6 +10,7 @@ import {
   updateChannel
 } from '@/net/alert'
 import { CHANNEL_TYPES, channelTypeMeta } from '@/tools/alert'
+import { submitEnabledToggle } from '@/tools/toggle'
 
 const loading = ref(false)
 const channels = ref([])
@@ -217,16 +218,10 @@ function toggleEnabled(row) {
     enabled: row.enabled,
     config
   }
-  updateChannel(
-    row.id,
-    payload,
-    () => {
-      ElMessage.success(row.enabled ? '已启用' : '已禁用')
-    },
-    () => {
-      row.enabled = !row.enabled
-    }
-  )
+  submitEnabledToggle({
+    row,
+    update: (success, failure) => updateChannel(row.id, payload, success, failure)
+  })
 }
 
 /**

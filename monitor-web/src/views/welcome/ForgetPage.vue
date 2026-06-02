@@ -100,11 +100,12 @@
 </template>
 
 <script setup>
-import { reactive, ref } from 'vue'
+import { onBeforeUnmount, reactive, ref } from 'vue'
 import { EditPen, Lock, Message } from '@element-plus/icons-vue'
-import { get, post } from '@/net'
+import { post } from '@/net'
 import { ElMessage } from 'element-plus'
 import router from '@/router'
+import { createEmailCodeRequester } from '@/tools/verification-code'
 
 const active = ref(0)
 
@@ -141,29 +142,17 @@ const rules = {
 const formRef = ref()
 const isEmailValid = ref(false)
 const coldTime = ref(0)
+const emailCodeRequester = createEmailCodeRequester({ cooldownRef: coldTime })
 
 const onValidate = (prop, isValid) => {
   if (prop === 'email') isEmailValid.value = isValid
 }
 
-const validateEmail = () => {
-  coldTime.value = 60
-  get(
-    `/api/auth/ask-code?email=${form.email}&type=reset`,
-    () => {
-      ElMessage.success(`验证码已发送到邮箱: ${form.email}，请注意查收`)
-      const handle = setInterval(() => {
-        coldTime.value--
-        if (coldTime.value === 0) {
-          clearInterval(handle)
-        }
-      }, 1000)
-    },
-    (message) => {
-      ElMessage.warning(message)
-      coldTime.value = 0
-    }
-  )
+/**
+ * 发送重置密码验证码，并在成功后启动倒计时。
+ */
+function validateEmail() {
+  emailCodeRequester.request(form.email, 'reset')
 }
 
 const confirmReset = () => {
@@ -199,6 +188,10 @@ const doReset = () => {
     }
   })
 }
+
+onBeforeUnmount(() => {
+  emailCodeRequester.dispose()
+})
 </script>
 
 <style scoped></style>

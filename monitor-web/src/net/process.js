@@ -1,4 +1,5 @@
 import { get } from '@/net'
+import { withQuery } from '@/net/query'
 
 /**
  * v1.3：拉取指定主机的最新进程快照。
@@ -10,5 +11,5 @@ import { get } from '@/net'
  * @param {(message: string, status: number, url: string) => void} [failure] 失败回调
  */
 export function getProcessSnapshot(clientId, success, failure) {
-  get(`/api/monitor/process?clientId=${clientId}`, success, failure)
+  get(withQuery('/api/monitor/process', { clientId }), success, failure)
 }

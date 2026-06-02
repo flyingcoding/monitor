@@ -68,7 +68,7 @@ import { User, Lock } from '@element-plus/icons-vue'
 import router from '@/router'
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { login, fetchSelf } from '@/net'
+import { login, fetchSelf, storeAccessToken } from '@/net'
 import { listPublicProviders } from '@/net/oidc'
 
 const formRef = ref()
@@ -135,9 +135,8 @@ function handleOidcCallback() {
 
   if (token && expire) {
     const expireDate = new Date(parseInt(expire, 10))
-    const authObj = { token, expire: expireDate.toISOString() }
     // OIDC 登录默认走 localStorage（与"记住我"等效），便于跨标签页保留状态
-    localStorage.setItem('authorize', JSON.stringify(authObj))
+    storeAccessToken(true, token, expireDate.toISOString())
     // 清掉 query 参数避免回退时再次触发
     window.history.replaceState({}, '', window.location.pathname)
     // P2-1：fetchSelf 立即用新 JWT 回填 store.user（role/username/email），
