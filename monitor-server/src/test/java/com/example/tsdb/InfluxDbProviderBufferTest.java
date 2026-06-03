@@ -3,6 +3,7 @@ package com.example.tsdb;
 import com.alibaba.fastjson2.JSON;
 import com.example.entity.vo.request.RuntimeDetailVO;
 import com.example.entity.vo.response.RuntimeHistoryVO;
+import com.influxdb.client.WriteApiBlocking;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -11,11 +12,14 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.lang.reflect.Method;
+import java.lang.reflect.Proxy;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Stream;
 
 /**
@@ -23,7 +27,7 @@ import java.util.stream.Stream;
  *
  * <p>不依赖真实 InfluxDB。覆盖：
  * <ul>
- *   <li>{@code appendBufferRecord} 写入 JSONL 文件且字段往返可解析；</li>
+ *   <li>{@code bufferRuntime} / {@code bufferRuntimeBatch} 写入 JSONL 文件且字段往返可解析；</li>
  *   <li>缓冲文件命名形如 {@code <millis>-<uuid>.jsonl}；</li>
  *   <li>{@code archiveFile} 把成功重放的文件移到 {@code archive/} 子目录；</li>
  *   <li>{@code replaySingleFile} 在文件无效时返回 false 并保留原文件等待下次重试。</li>
@@ -59,7 +63,7 @@ class InfluxDbProviderBufferTest {
         ReflectionTestUtils.setField(vo, "diskRead", 1.0);
         ReflectionTestUtils.setField(vo, "diskWrite", 2.0);
 
-        invoke("appendBufferRecord", new Class[]{int.class, RuntimeDetailVO.class}, 42, vo);
+        provider.bufferRuntime(42, vo);
 
         try (Stream<Path> files = Files.list(tempDir)) {
             List<Path> jsonl = files
@@ -82,6 +86,54 @@ class InfluxDbProviderBufferTest {
     }
 
     @Test
+    void writeRuntimeBatchShouldUseBlockingBatchApiOnce() {
+        AtomicInteger writeMeasurementsCount = new AtomicInteger(0);
+        AtomicInteger measurementSize = new AtomicInteger(0);
+        WriteApiBlocking writeApi = (WriteApiBlocking) Proxy.newProxyInstance(
+                WriteApiBlocking.class.getClassLoader(),
+                new Class[]{WriteApiBlocking.class},
+                (proxy, method, args) -> {
+                    if ("writeMeasurements".equals(method.getName())) {
+                        writeMeasurementsCount.incrementAndGet();
+                        measurementSize.set(((List<?>) args[3]).size());
+                        return null;
+                    }
+                    if ("toString".equals(method.getName())) {
+                        return "WriteApiBlockingTestStub";
+                    }
+                    throw new UnsupportedOperationException("测试桩未实现方法: " + method.getName());
+                });
+        ReflectionTestUtils.setField(provider, "writeApi", writeApi);
+        ReflectionTestUtils.setField(provider, "bucket", "program");
+        ReflectionTestUtils.setField(provider, "organization", "monitor");
+
+        provider.writeRuntimeBatch(42, List.of(sampleVo(), sampleVo()));
+
+        Assertions.assertEquals(1, writeMeasurementsCount.get(), "批量写入应只调用一次 writeMeasurements");
+        Assertions.assertEquals(2, measurementSize.get(), "批量写入应携带两个 measurement");
+    }
+
+    @Test
+    void bufferRuntimeBatchShouldWriteSingleJsonlFileWithMultipleLines() throws Exception {
+        provider.bufferRuntimeBatch(42, List.of(sampleVo(), sampleVo()));
+
+        try (Stream<Path> files = Files.list(tempDir)) {
+            List<Path> jsonl = files
+                    .filter(p -> p.getFileName().toString().endsWith(".jsonl"))
+                    .toList();
+            Assertions.assertEquals(1, jsonl.size(), "批量降级应写入单个 JSONL 文件，减少文件数量");
+            List<String> lines = Files.readAllLines(jsonl.get(0), StandardCharsets.UTF_8);
+            Assertions.assertEquals(2, lines.size(), "单个 JSONL 文件应包含批次内每条记录");
+            for (String line : lines) {
+                InfluxDbProvider.TsdbBufferRecord record =
+                        JSON.parseObject(line, InfluxDbProvider.TsdbBufferRecord.class);
+                Assertions.assertEquals(42, record.getClientId());
+                Assertions.assertNotNull(record.getRuntime());
+            }
+        }
+    }
+
+    @Test
     void replaySingleFileShouldReturnFalseAndKeepFileWhenContentInvalid() throws Exception {
         Path bad = tempDir.resolve("1700000000000-invalid.jsonl");
         Files.writeString(bad, "{not valid json", StandardCharsets.UTF_8);
@@ -94,12 +146,9 @@ class InfluxDbProviderBufferTest {
     }
 
     @Test
-    void replaySingleFileShouldUseActiveAdapterWhenVictoriaMetricsConfigured() throws Exception {
+    void replaySingleFileShouldUseActiveAdapterBatchWhenVictoriaMetricsConfigured() throws Exception {
         RuntimeDetailVO vo = sampleVo();
-        InfluxDbProvider.TsdbBufferRecord record = new InfluxDbProvider.TsdbBufferRecord();
-        record.setClientId(42);
-        record.setRuntime(vo);
-        record.setBufferedAt(1_700_000_000_000L);
+        InfluxDbProvider.TsdbBufferRecord record = bufferRecord(42, vo);
         Path file = tempDir.resolve("1700000000000-vm-replay.jsonl");
         Files.writeString(file, JSON.toJSONString(record) + System.lineSeparator(), StandardCharsets.UTF_8);
 
@@ -110,12 +159,39 @@ class InfluxDbProviderBufferTest {
         Boolean ok = (Boolean) invoke("replaySingleFile", new Class[]{Path.class}, file);
 
         Assertions.assertEquals(Boolean.TRUE, ok, "VM 模式下重放成功后应归档原文件");
-        Assertions.assertEquals(1, activeAdapter.writeCount, "VM 模式下必须通过当前 active adapter 重放");
+        Assertions.assertEquals(0, activeAdapter.writeCount, "VM 模式下不应退回逐条 writeRuntime 重放");
+        Assertions.assertEquals(1, activeAdapter.batchWriteCount, "VM 模式下必须通过当前 active adapter 批量重放");
+        Assertions.assertEquals(1, activeAdapter.batchSizes.get(0));
         Assertions.assertEquals(42, activeAdapter.lastClientId);
         Assertions.assertEquals(vo.getTimestamp(), activeAdapter.lastRuntime.getTimestamp());
         Assertions.assertEquals(vo.getCpuUsage(), activeAdapter.lastRuntime.getCpuUsage(), 1e-9);
         Assertions.assertTrue(Files.exists(tempDir.resolve("archive").resolve(file.getFileName())),
                 "重放成功的文件应移动到 archive");
+    }
+
+    @Test
+    void replaySingleFileShouldGroupMultiLineBufferByClientIdForBatchWrites() throws Exception {
+        RuntimeDetailVO first = sampleVo();
+        RuntimeDetailVO second = sampleVo();
+        ReflectionTestUtils.setField(second, "timestamp", 1_700_000_010_000L);
+        Path file = tempDir.resolve("1700000000000-vm-replay-mixed.jsonl");
+        Files.writeString(file,
+                JSON.toJSONString(bufferRecord(42, first)) + System.lineSeparator()
+                        + JSON.toJSONString(bufferRecord(43, second)) + System.lineSeparator(),
+                StandardCharsets.UTF_8);
+
+        RecordingAdapter activeAdapter = new RecordingAdapter();
+        ReflectionTestUtils.setField(provider, "activeProvider", TsdbAdapterFactory.PROVIDER_VICTORIA_METRICS);
+        ReflectionTestUtils.setField(provider, "activeAdapterProvider", objectProvider(activeAdapter));
+
+        Boolean ok = (Boolean) invoke("replaySingleFile", new Class[]{Path.class}, file);
+
+        Assertions.assertEquals(Boolean.TRUE, ok, "多行 JSONL 重放成功后应归档原文件");
+        Assertions.assertEquals(2, activeAdapter.batchWriteCount, "不同 clientId 应分别批量重放");
+        Assertions.assertEquals(List.of(42, 43), activeAdapter.batchClientIds);
+        Assertions.assertEquals(List.of(1, 1), activeAdapter.batchSizes);
+        Assertions.assertTrue(Files.exists(tempDir.resolve("archive").resolve(file.getFileName())),
+                "重放成功的多行文件应移动到 archive");
     }
 
     @Test
@@ -130,7 +206,7 @@ class InfluxDbProviderBufferTest {
         for (int i = 0; i < 3; i++) {
             RuntimeDetailVO vo = new RuntimeDetailVO();
             ReflectionTestUtils.setField(vo, "timestamp", System.currentTimeMillis());
-            invoke("appendBufferRecord", new Class[]{int.class, RuntimeDetailVO.class}, i, vo);
+            provider.bufferRuntime(i, vo);
         }
         try (Stream<Path> files = Files.list(tempDir)) {
             long count = files.filter(p -> p.getFileName().toString().endsWith(".jsonl")).count();
@@ -235,6 +311,14 @@ class InfluxDbProviderBufferTest {
         return vo;
     }
 
+    private InfluxDbProvider.TsdbBufferRecord bufferRecord(int clientId, RuntimeDetailVO vo) {
+        InfluxDbProvider.TsdbBufferRecord record = new InfluxDbProvider.TsdbBufferRecord();
+        record.setClientId(clientId);
+        record.setRuntime(vo);
+        record.setBufferedAt(1_700_000_000_000L);
+        return record;
+    }
+
     private static ObjectProvider<TimeSeriesAdapter> objectProvider(TimeSeriesAdapter adapter) {
         return new ObjectProvider<>() {
             @Override
@@ -276,14 +360,26 @@ class InfluxDbProviderBufferTest {
 
     private static class RecordingAdapter implements TimeSeriesAdapter {
         private int writeCount;
+        private int batchWriteCount;
         private int lastClientId;
         private RuntimeDetailVO lastRuntime;
+        private final List<Integer> batchClientIds = new ArrayList<>();
+        private final List<Integer> batchSizes = new ArrayList<>();
 
         @Override
         public void writeRuntime(int clientId, RuntimeDetailVO vo) {
             writeCount++;
             lastClientId = clientId;
             lastRuntime = vo;
+        }
+
+        @Override
+        public void writeRuntimeBatch(int clientId, List<RuntimeDetailVO> batch) {
+            batchWriteCount++;
+            lastClientId = clientId;
+            lastRuntime = batch.get(batch.size() - 1);
+            batchClientIds.add(clientId);
+            batchSizes.add(batch.size());
         }
 
         @Override

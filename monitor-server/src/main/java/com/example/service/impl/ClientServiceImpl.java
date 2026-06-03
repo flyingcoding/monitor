@@ -157,6 +157,43 @@ public class ClientServiceImpl extends ServiceImpl<ClientMapper, Client> impleme
         currentRuntime.put(client.getId(), vo);
         heartbeatMap.put(client.getId(), System.currentTimeMillis());
         influx.writeRuntime(client.getId(), vo);
+        this.publishRuntimeSideEffects(vo, client);
+    }
+
+    /**
+     * 批量处理运行时数据：TSDB 走一次批量写入，本地缓存 / SSE / 告警仍逐条保持旧语义。
+     *
+     * @param batch  运行时数据批次
+     * @param client 当前客户端
+     */
+    @Override
+    public void updateRuntimeDetails(List<RuntimeDetailVO> batch, Client client) {
+        if (batch == null || batch.isEmpty()) {
+            return;
+        }
+        List<RuntimeDetailVO> validBatch = batch.stream()
+                .filter(Objects::nonNull)
+                .toList();
+        if (validBatch.isEmpty()) {
+            return;
+        }
+        for (RuntimeDetailVO vo : validBatch) {
+            currentRuntime.put(client.getId(), vo);
+            heartbeatMap.put(client.getId(), System.currentTimeMillis());
+        }
+        influx.writeRuntimeBatch(client.getId(), validBatch);
+        for (RuntimeDetailVO vo : validBatch) {
+            this.publishRuntimeSideEffects(vo, client);
+        }
+    }
+
+    /**
+     * 发布运行时数据相关副作用，保持单条与批量上报的 SSE / 告警行为一致。
+     *
+     * @param vo     运行时数据
+     * @param client 当前客户端
+     */
+    private void publishRuntimeSideEffects(RuntimeDetailVO vo, Client client) {
         sseEventBus.publishRuntime(client.getId(), vo);
         sseEventBus.publishClientList();
         alertEvaluator.evaluate(client.getId(), vo);

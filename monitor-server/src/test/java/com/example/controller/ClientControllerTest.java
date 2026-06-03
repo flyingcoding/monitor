@@ -11,6 +11,7 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 import java.util.Date;
 import java.lang.reflect.Proxy;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -24,6 +25,8 @@ class ClientControllerTest {
     private MockMvc mockMvc;
     private final AtomicBoolean registerClientResult = new AtomicBoolean(false);
     private final AtomicInteger runtimeUpdateCount = new AtomicInteger(0);
+    private final AtomicInteger runtimeBatchUpdateCount = new AtomicInteger(0);
+    private final AtomicInteger runtimeBatchItemCount = new AtomicInteger(0);
 
     /**
      * 构建独立Controller测试上下文，使用轻量动态代理桩替代Mockito，避免依赖JVM attach能力。
@@ -40,6 +43,11 @@ class ClientControllerTest {
                     }
                     if ("updateRuntimeDetail".equals(method.getName())) {
                         runtimeUpdateCount.incrementAndGet();
+                        return null;
+                    }
+                    if ("updateRuntimeDetails".equals(method.getName())) {
+                        runtimeBatchUpdateCount.incrementAndGet();
+                        runtimeBatchItemCount.addAndGet(((List<?>) args[0]).size());
                         return null;
                     }
                     if ("toString".equals(method.getName())) {
@@ -86,6 +94,8 @@ class ClientControllerTest {
     @Test
     void runtimeBatchShouldReturnSuccessAndInvokeServicePerItem() throws Exception {
         runtimeUpdateCount.set(0);
+        runtimeBatchUpdateCount.set(0);
+        runtimeBatchItemCount.set(0);
         Client client = new Client(1, "n1", "t1", "cn", "node-1", new Date(), null);
         String payload = """
                 [
@@ -119,7 +129,11 @@ class ClientControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(200));
 
-        org.junit.jupiter.api.Assertions.assertEquals(2, runtimeUpdateCount.get());
+        org.junit.jupiter.api.Assertions.assertEquals(0, runtimeUpdateCount.get(),
+                "批量接口不应再逐条调用 updateRuntimeDetail");
+        org.junit.jupiter.api.Assertions.assertEquals(1, runtimeBatchUpdateCount.get(),
+                "批量接口应只调用一次 service 批量入口");
+        org.junit.jupiter.api.Assertions.assertEquals(2, runtimeBatchItemCount.get());
     }
 
     /**
@@ -128,6 +142,8 @@ class ClientControllerTest {
     @Test
     void runtimeBatchShouldRejectNullItem() throws Exception {
         runtimeUpdateCount.set(0);
+        runtimeBatchUpdateCount.set(0);
+        runtimeBatchItemCount.set(0);
         Client client = new Client(1, "n1", "t1", "cn", "node-1", new Date(), null);
 
         mockMvc.perform(post("/monitor/runtime/batch")
@@ -137,6 +153,7 @@ class ClientControllerTest {
                 .andExpect(status().isBadRequest());
 
         org.junit.jupiter.api.Assertions.assertEquals(0, runtimeUpdateCount.get());
+        org.junit.jupiter.api.Assertions.assertEquals(0, runtimeBatchUpdateCount.get());
     }
 
     /**
@@ -145,6 +162,8 @@ class ClientControllerTest {
     @Test
     void runtimeBatchShouldNotPartiallyPersistWhenContainsNullItem() throws Exception {
         runtimeUpdateCount.set(0);
+        runtimeBatchUpdateCount.set(0);
+        runtimeBatchItemCount.set(0);
         Client client = new Client(1, "n1", "t1", "cn", "node-1", new Date(), null);
         String payload = """
                 [
@@ -169,5 +188,6 @@ class ClientControllerTest {
                 .andExpect(status().isBadRequest());
 
         org.junit.jupiter.api.Assertions.assertEquals(0, runtimeUpdateCount.get());
+        org.junit.jupiter.api.Assertions.assertEquals(0, runtimeBatchUpdateCount.get());
     }
 }

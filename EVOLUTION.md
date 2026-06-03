@@ -197,7 +197,7 @@
 | ✅ 客户端断线重试 | **已实现**（ff74e87 / efb609f） | — |
 | ✅ 前端图表渲染 | **LTTB 已迁移到 Web Worker**（RuntimeHistory 数据归一化 + 下采样） | — |
 | ✅ 前端首屏包体 | **已完成 Manage route 拆包**（重组件异步加载 + manualChunks） | — |
-| ⚠️ InfluxDB 写入 | 已有 Resilience4j 断路器，但仍是逐条 | v1.x 增加批量写入 + 写缓冲 |
+| ✅ TSDB 写入 | **已完成批量写入 + 共享 JSONL 批量缓冲**（`/monitor/runtime/batch` → `TimeSeriesAdapter.writeRuntimeBatch`；InfluxDB / VictoriaMetrics 走 `writeMeasurements`；重放按 clientId 批量） | — |
 | ❌ Redis 缓存层 | 仅限流和验证码 | v1.x 扩展为客户端状态/详情缓存 |
 | ❌ 数据库索引 | 基础索引 | 根据查询模式添加复合索引（v1.1 告警表设计时一并补） |
 
@@ -431,7 +431,8 @@ P4 (terminal 完成) Web 终端多 Tab                                     [v2.0
 P4 (sftp 完成) Web 终端 SFTP MVP                                      [v2.0-sftp-mvp] ✅ 2026-06-02
 P4 (performance-frontend 完成) Manage 首屏包体拆分                    [v2.0-performance-frontend-bundle-split] ✅ 2026-06-03
 P4 (performance-worker 完成) RuntimeHistory Web Worker 下采样          [v2.0-performance-runtime-history-worker] ✅ 2026-06-03
-P4 (剩余)     性能优化（写缓冲 / Redis 缓存 / 索引）                    [v2.0]
+P4 (performance-tsdb 完成) /monitor/runtime/batch TSDB 批量写入 + JSONL 批量缓冲 [v2.0-performance-tsdb-batch-write] ✅ 2026-06-03
+P4 (剩余)     性能优化（Redis 缓存 / 索引）                              [v2.0]
 P5 (长期)     部署体验 → 性能优化 → 多租户                          [v3.0+]
 P6 (可选)     SaaS 模式 → 合规与审计                                [v3.0+]
 ```
@@ -473,7 +474,8 @@ P6 (可选)     SaaS 模式 → 合规与审计                                [
 2027 Q4  v2.0-tests      集成测试（Testcontainers）+ E2E（Playwright 三浏览器）          ✅ 2026-06-01
 2027 Q4  v2.0-terminal-tabs Web 终端多 Tab                                               ✅ 2026-06-02
 2027 Q4  v2.0-sftp-mvp   Web 终端 SFTP MVP                                               ✅ 2026-06-02
-2027 Q4  v2.0            性能优化
+2027 Q4  v2.0-performance TSDB 批量写入 / 前端性能拆分 / Worker 下采样                  ✅ 2026-06-03
+2027 Q4  v2.0            剩余性能优化（Redis 缓存 / 索引）
 2028+    v3.0+           部署体验 / 性能优化 / 多租户 / 可选 SaaS / 合规审计
 ```
 
@@ -804,6 +806,30 @@ JaCoCo verify 通过（`com.example.service.impl` LINE ≥ 60% 未回归）。
 
 **未做（明确 out-of-scope）**：
 - InfluxDB / TSDB 写缓冲与批量写入
+- Redis 客户端状态 / 详情缓存层
+- 查询索引专项优化
+
+
+### v2.0-performance-tsdb-batch-write 实施记录（2026-06-03）
+
+> PRD：`.trellis/tasks/06-03-v2-0-performance-tsdb-batch-write/prd.md`
+
+**零接口变更 / TSDB 写入从逐条收敛为 provider 级批量写入**——保留客户端 `/monitor/runtime/batch` 请求体与返回结构不变，Controller 先整体验证批次，再调用服务层批量入口一次；单条 `/monitor/runtime` 行为不变。
+
+| 新增 / 改动 | 范围 |
+|------------|------|
+| `com.example.tsdb.TimeSeriesAdapter` | 新增默认方法 `writeRuntimeBatch(int, List<RuntimeDetailVO>)`；未知实现自动退回逐条 `writeRuntime`，保持兼容 |
+| `com.example.service.ClientService` / `ClientServiceImpl` | 新增 `updateRuntimeDetails(List<RuntimeDetailVO>, Client)`；本地 runtime 缓存、heartbeat、runtime SSE、client-list SSE、告警评估仍逐条保持旧语义，TSDB 写入合并为一次 |
+| `com.example.controller.ClientController` | `/monitor/runtime/batch` 整体验证后调用 service 批量入口一次，不再在 Controller 内循环单条服务方法 |
+| `com.example.tsdb.InfluxDbProvider` | `writeRuntimeBatch` 调 `WriteApiBlocking.writeMeasurements(...)`；批量断路器 fallback 写入一个多行 JSONL 缓冲文件；重放按文件顺序读取并按 clientId 批量写回 |
+| `com.example.tsdb.VictoriaMetricsProvider` | `writeRuntimeBatch` 复用 InfluxDB line protocol 兼容写入，一批只发一次 `/api/v2/write`；批量 fallback 进入共享 TSDB JSONL 缓冲 |
+| `.trellis/spec/backend/database-guidelines.md` | 新增 Runtime batch ingestion / TSDB batch writes 可执行约定，固化 batch API、fallback、replay 与测试要求 |
+
+**测试覆盖**：
+- 后端定向 `mvn -Dtest=ClientControllerTest,ClientServiceImplRuntimeBatchTest,InfluxDbProviderBufferTest,VictoriaMetricsProviderTest test -Pdev` 通过（35 tests）。
+- 后端完整 `mvn test -Pdev` 通过（414 tests）。
+
+**未做（明确 out-of-scope）**：
 - Redis 客户端状态 / 详情缓存层
 - 查询索引专项优化
 

@@ -40,7 +40,7 @@ import static com.github.tomakehurst.wiremock.client.WireMock.urlPathEqualTo;
  * </ul>
  *
  * <p>断路器自身的 fallback 触发依赖 Spring AOP 代理，单元测试不便直接验证；
- * 这里通过反射调用私有 {@code writeToFallbackBuffer} 方法直接测试降级语义。
+ * 这里通过反射调用私有 fallback 方法直接测试降级语义。
  * 端到端真实断路器行为在 PR5 Testcontainers 集成测试中覆盖。
  */
 class VictoriaMetricsProviderTest {
@@ -85,6 +85,18 @@ class VictoriaMetricsProviderTest {
                 .withRequestBody(containing("runtime"))
                 .withRequestBody(containing("cpuUsage"));
         wireMock.verify(pattern);
+    }
+
+    @Test
+    void writeRuntimeBatchShouldPostOneLineProtocolRequestToVmWriteEndpoint() {
+        wireMock.stubFor(post(urlPathEqualTo("/api/v2/write"))
+                .willReturn(aResponse().withStatus(204)));
+
+        provider.writeRuntimeBatch(42, List.of(sampleVo(), sampleVo()));
+
+        wireMock.verify(1, postRequestedFor(urlPathEqualTo("/api/v2/write"))
+                .withRequestBody(containing("runtime"))
+                .withRequestBody(containing("cpuUsage")));
     }
 
     @Test
@@ -348,6 +360,32 @@ class VictoriaMetricsProviderTest {
             Assertions.assertEquals(5, record.getClientId());
             Assertions.assertNotNull(record.getRuntime());
             Assertions.assertEquals(0.42, record.getRuntime().getCpuUsage(), 1e-9);
+        }
+    }
+
+    @Test
+    void batchFallbackMethodShouldWriteOneSharedBufferFileWithMultipleLines() throws Exception {
+        Path bufferDir = tempDir.resolve("vm-batch-fallback");
+        ReflectionTestUtils.setField(fallback, "bufferDir", bufferDir.toString());
+
+        Method m = VictoriaMetricsProvider.class.getDeclaredMethod(
+                "writeBatchToFallbackBuffer", int.class, List.class, Throwable.class);
+        m.setAccessible(true);
+        m.invoke(provider, 5, List.of(sampleVo(), sampleVo()), new RuntimeException("simulated VM batch failure"));
+
+        try (Stream<Path> files = Files.list(bufferDir)) {
+            List<Path> jsonl = files
+                    .filter(p -> p.getFileName().toString().endsWith(".jsonl"))
+                    .toList();
+            Assertions.assertEquals(1, jsonl.size(), "VM 批量 fallback 必须只生成 1 个共享 JSONL 缓冲文件");
+            List<String> lines = Files.readAllLines(jsonl.get(0), StandardCharsets.UTF_8);
+            Assertions.assertEquals(2, lines.size(), "VM 批量 fallback 文件应包含批次内每条记录");
+            for (String line : lines) {
+                InfluxDbProvider.TsdbBufferRecord record =
+                        JSON.parseObject(line, InfluxDbProvider.TsdbBufferRecord.class);
+                Assertions.assertEquals(5, record.getClientId());
+                Assertions.assertNotNull(record.getRuntime());
+            }
         }
     }
 

@@ -24,6 +24,16 @@ public interface ClientService extends IService<Client>{
     Client findClientByToken(String token);
     void updateClientDetail(ClientDetailVO vo,Client client);
     void updateRuntimeDetail(RuntimeDetailVO vo, Client client);
+    /**
+     * 批量更新客户端运行时数据。
+     *
+     * <p>用于 {@code /monitor/runtime/batch}，应复用单条上报的本地缓存、SSE 与告警副作用，
+     * 但允许底层时序库以批量写入方式落库。
+     *
+     * @param batch  运行时数据批次
+     * @param client 当前客户端
+     */
+    void updateRuntimeDetails(List<RuntimeDetailVO> batch, Client client);
     List<ClientPreviewVO> listClients();
     List<ClientSimpleVO> listSimpleClients();
     void renameClient(RenameClientVO vo);

@@ -75,7 +75,7 @@ public class ClientController {
     }
 
     /**
-     * 批量上报运行时数据，逐条复用现有服务逻辑处理缓存补报场景。
+     * 批量上报运行时数据，统一校验后交由服务层执行一次 TSDB 批量写入。
      *
      * @param client 当前客户端
      * @param batch  运行时数据批次
@@ -88,9 +88,7 @@ public class ClientController {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "请求体不能为空");
         }
         this.validateRuntimeBatch(batch);
-        for (RuntimeDetailVO vo : batch) {
-            clientService.updateRuntimeDetail(vo, client);
-        }
+        clientService.updateRuntimeDetails(batch, client);
         return RestBean.success();
     }
 

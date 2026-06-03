@@ -4,6 +4,7 @@ import com.example.entity.vo.request.RuntimeDetailVO;
 import com.example.entity.vo.response.RuntimeHistoryVO;
 
 import java.time.Instant;
+import java.util.List;
 
 /**
  * 时序数据库适配层 (v2.0-alpha)。
@@ -32,6 +33,26 @@ public interface TimeSeriesAdapter {
      * @param vo       运行时指标 VO，单位约定见 {@link RuntimeDetailVO} 注释
      */
     void writeRuntime(int clientId, RuntimeDetailVO vo);
+
+    /**
+     * 批量写入客户端直传的运行时指标。
+     *
+     * <p>默认实现逐条调用 {@link #writeRuntime}，保证旧实现无破坏兼容；支持批量 API 的 provider
+     * 应覆盖此方法以减少阻塞写入次数。
+     *
+     * @param clientId 客户端 ID
+     * @param batch    运行时指标批次；空批次应安全忽略
+     */
+    default void writeRuntimeBatch(int clientId, List<RuntimeDetailVO> batch) {
+        if (batch == null || batch.isEmpty()) {
+            return;
+        }
+        for (RuntimeDetailVO vo : batch) {
+            if (vo != null) {
+                this.writeRuntime(clientId, vo);
+            }
+        }
+    }
 
     /**
      * 写入 OTLP HTTP 端点解析后的指标。

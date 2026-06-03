@@ -154,6 +154,12 @@ public class VictoriaMetricsProvider implements TimeSeriesAdapter {
     }
 
     @Override
+    @CircuitBreaker(name = "tsdb", fallbackMethod = "writeBatchToFallbackBuffer")
+    public void writeRuntimeBatch(int clientId, List<RuntimeDetailVO> batch) {
+        this.doWriteRuntimeDataBatch(clientId, batch);
+    }
+
+    @Override
     @CircuitBreaker(name = "tsdb", fallbackMethod = "writeToFallbackBuffer")
     public void writeOtlpMetric(int clientId, RuntimeDetailVO vo) {
         this.doWriteRuntimeData(clientId, vo);
@@ -175,22 +181,79 @@ public class VictoriaMetricsProvider implements TimeSeriesAdapter {
     }
 
     /**
+     * 断路器批量回退逻辑：VM 批量写入失败时把整批样本写入共享 JSONL 缓冲。
+     *
+     * @param clientId  客户端 ID
+     * @param batch     运行时数据批次
+     * @param throwable 触发回退的异常
+     */
+    private void writeBatchToFallbackBuffer(int clientId, List<RuntimeDetailVO> batch, Throwable throwable) {
+        int size = batch == null ? 0 : batch.size();
+        log.warn("VictoriaMetrics 批量写入降级到本地缓冲，clientId={}, size={}, reason={}", clientId, size,
+                throwable == null ? "unknown" : throwable.getMessage());
+        fallbackBuffer.bufferRuntimeBatch(clientId, batch);
+    }
+
+    /**
      * 把 {@link RuntimeDetailVO} 转换为 {@link RuntimeData} 并通过 line protocol 写入 VM。
      *
      * @param clientId 客户端 ID
      * @param vo       运行时数据
      */
     private void doWriteRuntimeData(int clientId, RuntimeDetailVO vo) {
-        RuntimeData data = new RuntimeData();
-        BeanUtils.copyProperties(vo, data);
-        data.setClientId(clientId);
-        data.setTimestamp(new Date(vo.getTimestamp()).toInstant());
+        RuntimeData data = this.toRuntimeData(clientId, vo);
+        if (data == null) {
+            return;
+        }
         // VM 忽略 bucket / org，但 SDK 必填，传占位常量
         writeApi.writeMeasurement(
                 VM_PLACEHOLDER_TOKEN_OR_BUCKET,
                 VM_PLACEHOLDER_ORG,
                 WritePrecision.NS,
                 data);
+    }
+
+    /**
+     * 批量转换并写入 VM 兼容 InfluxDB line protocol 端点。
+     *
+     * @param clientId 客户端 ID
+     * @param batch    运行时数据批次
+     */
+    private void doWriteRuntimeDataBatch(int clientId, List<RuntimeDetailVO> batch) {
+        if (batch == null || batch.isEmpty()) {
+            return;
+        }
+        List<RuntimeData> data = batch.stream()
+                .map(vo -> this.toRuntimeData(clientId, vo))
+                .filter(java.util.Objects::nonNull)
+                .toList();
+        if (data.isEmpty()) {
+            return;
+        }
+        // VM 忽略 bucket / org，但 SDK 必填，传占位常量
+        writeApi.writeMeasurements(
+                VM_PLACEHOLDER_TOKEN_OR_BUCKET,
+                VM_PLACEHOLDER_ORG,
+                WritePrecision.NS,
+                data);
+    }
+
+    /**
+     * 把 {@link RuntimeDetailVO} 转换为 {@link RuntimeData}。
+     *
+     * @param clientId 客户端 ID
+     * @param vo       运行时数据
+     * @return measurement DTO；输入为空时返回 null
+     */
+    private RuntimeData toRuntimeData(int clientId, RuntimeDetailVO vo) {
+        if (vo == null) {
+            return null;
+        }
+        RuntimeData data = new RuntimeData();
+        BeanUtils.copyProperties(vo, data);
+        data.setClientId(clientId);
+        data.setTimestamp(new Date(vo.getTimestamp()).toInstant());
+        return data;
     }
 
     @Override

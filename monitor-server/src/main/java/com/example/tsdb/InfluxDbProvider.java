@@ -30,8 +30,10 @@ import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.Date;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
@@ -47,7 +49,8 @@ import java.util.concurrent.locks.ReentrantLock;
  *
  * <h3>写入路径</h3>
  * <ul>
- *   <li>{@link #writeRuntime} / {@link #writeOtlpMetric} 都调用 {@link #doWriteRuntimeData}。</li>
+ *   <li>{@link #writeRuntime} / {@link #writeOtlpMetric} 调用 {@link #doWriteRuntimeData}；
+ *       {@link #writeRuntimeBatch} 调用 {@link #doWriteRuntimeDataBatch}。</li>
  *   <li>外层包装 {@code @CircuitBreaker(name="tsdb", fallbackMethod=...)}（v2.0-beta 从 {@code influxdb}
  *       统一改名为 {@code tsdb}，便于多 provider 共享同一断路器配置）；
  *       断路器配置见 {@code application-{dev,prod}.yml} 的 {@code resilience4j.circuitbreaker.instances.tsdb}。</li>
@@ -151,6 +154,12 @@ public class InfluxDbProvider implements TimeSeriesAdapter {
     }
 
     @Override
+    @CircuitBreaker(name = "tsdb", fallbackMethod = "writeBatchToFileBuffer")
+    public void writeRuntimeBatch(int clientId, List<RuntimeDetailVO> batch) {
+        this.doWriteRuntimeDataBatch(clientId, batch);
+    }
+
+    @Override
     @CircuitBreaker(name = "tsdb", fallbackMethod = "writeToFileBuffer")
     public void writeOtlpMetric(int clientId, RuntimeDetailVO vo) {
         this.doWriteRuntimeData(clientId, vo);
@@ -170,13 +179,40 @@ public class InfluxDbProvider implements TimeSeriesAdapter {
     }
 
     /**
+     * 断路器批量回退逻辑：把整批运行时数据写入同一个 JSONL 缓冲文件。
+     *
+     * @param clientId  客户端 ID
+     * @param batch     运行时数据批次
+     * @param throwable 触发回退的异常
+     */
+    private void writeBatchToFileBuffer(int clientId, List<RuntimeDetailVO> batch, Throwable throwable) {
+        int size = batch == null ? 0 : batch.size();
+        log.warn("InfluxDB 批量写入降级到本地缓冲，clientId={}, size={}, reason={}", clientId, size,
+                throwable == null ? "unknown" : throwable.getMessage());
+        this.bufferRuntimeBatch(clientId, batch);
+    }
+
+    /**
      * 将运行时数据写入共享 TSDB JSONL 缓冲，不尝试写任何具体后端。
      *
      * @param clientId 客户端 ID
      * @param vo       运行时数据
      */
     public void bufferRuntime(int clientId, RuntimeDetailVO vo) {
-        this.appendBufferRecord(clientId, vo);
+        if (vo == null) {
+            return;
+        }
+        this.appendBufferRecords(clientId, List.of(vo));
+    }
+
+    /**
+     * 将一批运行时数据写入共享 TSDB JSONL 缓冲，不尝试写任何具体后端。
+     *
+     * @param clientId 客户端 ID
+     * @param batch    运行时数据批次
+     */
+    public void bufferRuntimeBatch(int clientId, List<RuntimeDetailVO> batch) {
+        this.appendBufferRecords(clientId, batch);
     }
 
     /**
@@ -288,33 +324,85 @@ public class InfluxDbProvider implements TimeSeriesAdapter {
      * @param vo       运行时数据
      */
     private void doWriteRuntimeData(int clientId, RuntimeDetailVO vo) {
-        RuntimeData data = new RuntimeData();
-        BeanUtils.copyProperties(vo, data);
-        data.setClientId(clientId);
-        data.setTimestamp(new Date(vo.getTimestamp()).toInstant());
+        RuntimeData data = this.toRuntimeData(clientId, vo);
+        if (data == null) {
+            return;
+        }
         writeApi.writeMeasurement(bucket, organization, WritePrecision.NS, data);
     }
 
     /**
-     * 将降级数据追加到本地 JSONL 缓冲文件。
+     * 执行实际的 InfluxDB 批量写入。
+     *
+     * @param clientId 客户端 ID
+     * @param batch    运行时数据批次
+     */
+    private void doWriteRuntimeDataBatch(int clientId, List<RuntimeDetailVO> batch) {
+        if (batch == null || batch.isEmpty()) {
+            return;
+        }
+        List<RuntimeData> data = batch.stream()
+                .map(vo -> this.toRuntimeData(clientId, vo))
+                .filter(java.util.Objects::nonNull)
+                .toList();
+        if (data.isEmpty()) {
+            return;
+        }
+        writeApi.writeMeasurements(bucket, organization, WritePrecision.NS, data);
+    }
+
+    /**
+     * 把运行时 VO 转换为 InfluxDB measurement DTO。
      *
      * @param clientId 客户端 ID
      * @param vo       运行时数据
+     * @return InfluxDB measurement DTO；输入为空时返回 null
      */
-    private void appendBufferRecord(int clientId, RuntimeDetailVO vo) {
+    private RuntimeData toRuntimeData(int clientId, RuntimeDetailVO vo) {
+        if (vo == null) {
+            return null;
+        }
+        RuntimeData data = new RuntimeData();
+        BeanUtils.copyProperties(vo, data);
+        data.setClientId(clientId);
+        data.setTimestamp(new Date(vo.getTimestamp()).toInstant());
+        return data;
+    }
+
+    /**
+     * 将降级数据批量追加到同一个本地 JSONL 缓冲文件。
+     *
+     * @param clientId 客户端 ID
+     * @param batch    运行时数据批次
+     */
+    private void appendBufferRecords(int clientId, List<RuntimeDetailVO> batch) {
+        if (batch == null || batch.isEmpty()) {
+            return;
+        }
         bufferLock.lock();
         try {
             this.ensureBufferDirectories();
-            TsdbBufferRecord record = new TsdbBufferRecord();
-            record.setClientId(clientId);
-            record.setRuntime(vo);
-            record.setBufferedAt(Instant.now().toEpochMilli());
+            long bufferedAt = Instant.now().toEpochMilli();
+            StringBuilder content = new StringBuilder();
+            for (RuntimeDetailVO vo : batch) {
+                if (vo == null) {
+                    continue;
+                }
+                TsdbBufferRecord record = new TsdbBufferRecord();
+                record.setClientId(clientId);
+                record.setRuntime(vo);
+                record.setBufferedAt(bufferedAt);
+                content.append(JSON.toJSONString(record)).append(System.lineSeparator());
+            }
+            if (content.isEmpty()) {
+                return;
+            }
 
-            String fileName = record.getBufferedAt() + "-" + UUID.randomUUID() + ".jsonl";
+            String fileName = bufferedAt + "-" + UUID.randomUUID() + ".jsonl";
             Path target = Path.of(bufferDir, fileName);
             Files.writeString(
                     target,
-                    JSON.toJSONString(record) + System.lineSeparator(),
+                    content.toString(),
                     StandardCharsets.UTF_8,
                     StandardOpenOption.CREATE,
                     StandardOpenOption.APPEND
@@ -335,6 +423,7 @@ public class InfluxDbProvider implements TimeSeriesAdapter {
     private boolean replaySingleFile(Path file) {
         try {
             List<String> lines = Files.readAllLines(file, StandardCharsets.UTF_8);
+            List<TsdbBufferRecord> records = new ArrayList<>();
             for (String line : lines) {
                 if (line == null || line.isBlank()) {
                     continue;
@@ -343,8 +432,9 @@ public class InfluxDbProvider implements TimeSeriesAdapter {
                 if (record == null || record.getRuntime() == null) {
                     continue;
                 }
-                this.writeBufferedRecord(record);
+                records.add(record);
             }
+            this.writeBufferedRecords(records);
             this.archiveFile(file);
             return true;
         } catch (Exception e) {
@@ -432,15 +522,28 @@ public class InfluxDbProvider implements TimeSeriesAdapter {
      *
      * @param record 缓冲记录
      */
-    private void writeBufferedRecord(TsdbBufferRecord record) {
+    private void writeBufferedRecords(List<TsdbBufferRecord> records) {
+        if (records == null || records.isEmpty()) {
+            return;
+        }
+        Map<Integer, List<RuntimeDetailVO>> grouped = new LinkedHashMap<>();
+        for (TsdbBufferRecord record : records) {
+            if (record == null || record.getRuntime() == null) {
+                continue;
+            }
+            grouped.computeIfAbsent(record.getClientId(), ignored -> new ArrayList<>()).add(record.getRuntime());
+        }
+        if (grouped.isEmpty()) {
+            return;
+        }
         if (TsdbAdapterFactory.PROVIDER_VICTORIA_METRICS.equalsIgnoreCase(activeProvider)) {
             TimeSeriesAdapter adapter = activeAdapterProvider == null ? null : activeAdapterProvider.getIfAvailable();
             if (adapter != null && adapter != this) {
-                adapter.writeRuntime(record.getClientId(), record.getRuntime());
+                grouped.forEach(adapter::writeRuntimeBatch);
                 return;
             }
         }
-        this.doWriteRuntimeData(record.getClientId(), record.getRuntime());
+        grouped.forEach(this::doWriteRuntimeDataBatch);
     }
 
     /**
