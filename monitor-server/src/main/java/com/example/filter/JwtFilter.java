@@ -53,6 +53,8 @@ public class JwtFilter extends OncePerRequestFilter {
                                     @NotNull FilterChain filterChain) throws ServletException, IOException {
         String requestUri = request.getRequestURI();
         boolean terminalRequest = requestUri.startsWith("/terminal/");
+        boolean sftpRequest = requestUri.startsWith("/sftp/");
+        boolean clientWebSocketRequest = terminalRequest || sftpRequest;
         String authorization = this.resolveAuthorization(request, requestUri);
 
         if (requestUri.startsWith("/monitor")) {
@@ -67,7 +69,7 @@ public class JwtFilter extends OncePerRequestFilter {
             }
         } else {
             DecodedJWT jwt = utils.resolveJwt(authorization);
-            if (terminalRequest && jwt == null) {
+            if (clientWebSocketRequest && jwt == null) {
                 this.writeFailure(response, 401, "未登录或令牌已失效");
                 return;
             }
@@ -83,10 +85,10 @@ public class JwtFilter extends OncePerRequestFilter {
                 request.setAttribute(Const.ATTR_USER_ID, userId);
                 request.setAttribute(Const.ATTR_USER_ROLE, userRole);
 
-                if (terminalRequest) {
-                    Integer clientId = this.resolveTerminalClientId(requestUri);
+                if (clientWebSocketRequest) {
+                    Integer clientId = this.resolveClientWebSocketClientId(requestUri, terminalRequest);
                     if (clientId == null) {
-                        this.writeFailure(response, 400, "终端地址非法");
+                        this.writeFailure(response, 400, "WebSocket地址非法");
                         return;
                     }
                     if (!this.accessShell(userId, userRole, clientId)) {
@@ -110,7 +112,8 @@ public class JwtFilter extends OncePerRequestFilter {
         String authorization = request.getHeader("Authorization");
         boolean allowQueryToken = requestUri.startsWith("/api/sse/")
                 || requestUri.startsWith("/api/v1/sse/")
-                || requestUri.startsWith("/terminal/");
+                || requestUri.startsWith("/terminal/")
+                || requestUri.startsWith("/sftp/");
         if (authorization == null && allowQueryToken) {
             String tokenParam = request.getParameter("token");
             if (tokenParam != null && !tokenParam.isBlank()) {
@@ -121,14 +124,15 @@ public class JwtFilter extends OncePerRequestFilter {
     }
 
     /**
-     * 从终端请求路径中提取客户端 ID。
+     * 从终端或 SFTP WebSocket 请求路径中提取客户端 ID。
      *
      * @param requestUri 请求路径
+     * @param terminalRequest 是否为终端请求
      * @return 客户端ID，解析失败返回 null
      */
-    private Integer resolveTerminalClientId(String requestUri) {
+    private Integer resolveClientWebSocketClientId(String requestUri, boolean terminalRequest) {
         try {
-            return Integer.parseInt(requestUri.substring(10));
+            return Integer.parseInt(requestUri.substring(terminalRequest ? 10 : 6));
         } catch (RuntimeException e) {
             return null;
         }

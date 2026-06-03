@@ -75,6 +75,7 @@ public class SecurityConfiguration {
         return http
                 .authorizeHttpRequests(conf -> conf
                         .requestMatchers("/terminal/**").authenticated()
+                        .requestMatchers("/sftp/**").authenticated()
                         .requestMatchers("/api/auth/**", "/error").permitAll()
                         .requestMatchers("/monitor/**").permitAll()
                         .requestMatchers("/actuator/**").permitAll()

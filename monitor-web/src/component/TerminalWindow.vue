@@ -3,6 +3,7 @@ import { reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { get, post } from '@/net'
 import { withQuery } from '@/net/query'
+import SftpPanel from '@/component/SftpPanel.vue'
 import Terminal from '@/component/Terminal.vue'
 import {
   createTerminalTab,
@@ -203,13 +204,24 @@ watch(
           </el-form>
         </div>
         <div v-if="tab.state === 2">
-          <div style="overflow: hidden; padding: 0 10px 10px 10px">
-            <terminal
-              :id="tab.clientId"
-              :session-id="tab.sessionId"
-              @dispose="markDisconnected(tab)"
-            />
-          </div>
+          <el-tabs v-model="tab.panel" type="border-card" class="session-panels">
+            <el-tab-pane name="terminal" label="终端">
+              <div class="terminal-frame">
+                <terminal
+                  :id="tab.clientId"
+                  :session-id="tab.sessionId"
+                  @dispose="markDisconnected(tab)"
+                />
+              </div>
+            </el-tab-pane>
+            <el-tab-pane name="sftp" label="文件">
+              <sftp-panel
+                v-if="tab.panel === 'sftp'"
+                :client-id="tab.clientId"
+                :session-id="tab.sessionId"
+              />
+            </el-tab-pane>
+          </el-tabs>
         </div>
       </el-tab-pane>
     </el-tabs>
@@ -235,6 +247,14 @@ watch(
 
   .terminal-tabs {
     height: calc(100% - 42px);
+  }
+
+  .session-panels {
+    margin: 0 10px 10px;
+  }
+
+  .terminal-frame {
+    overflow: hidden;
   }
 
   .login {

@@ -427,7 +427,8 @@ P3 (beta 完成)  VictoriaMetrics Provider 真实实现 + vmctl 迁移工具 [v2
 P4 (frontend 完成) Dashboard 时间范围 + CSV 导出 + Notification 补齐 [v2.0-frontend-ux] ✅ 2026-05-20
 P4 (tests 完成) 集成测试（Testcontainers）+ E2E（Playwright 三浏览器） [v2.0-tests] ✅ 2026-06-01
 P4 (terminal 完成) Web 终端多 Tab                                     [v2.0-terminal-tabs] ✅ 2026-06-02
-P4 (剩余)     SFTP + 性能优化                                          [v2.0]
+P4 (sftp 完成) Web 终端 SFTP MVP                                      [v2.0-sftp-mvp] ✅ 2026-06-02
+P4 (剩余)     性能优化                                                  [v2.0]
 P5 (长期)     部署体验 → 性能优化 → 多租户                          [v3.0+]
 P6 (可选)     SaaS 模式 → 合规与审计                                [v3.0+]
 ```
@@ -468,7 +469,8 @@ P6 (可选)     SaaS 模式 → 合规与审计                                [
 2027 Q4  v2.0-frontend-ux Dashboard 时间范围 + CSV 导出 + Notification 补齐              ✅ 2026-05-20
 2027 Q4  v2.0-tests      集成测试（Testcontainers）+ E2E（Playwright 三浏览器）          ✅ 2026-06-01
 2027 Q4  v2.0-terminal-tabs Web 终端多 Tab                                               ✅ 2026-06-02
-2027 Q4  v2.0            SFTP + 性能优化
+2027 Q4  v2.0-sftp-mvp   Web 终端 SFTP MVP                                               ✅ 2026-06-02
+2027 Q4  v2.0            性能优化
 2028+    v3.0+           部署体验 / 性能优化 / 多租户 / 可选 SaaS / 合规审计
 ```
 
@@ -707,6 +709,40 @@ JaCoCo verify 通过（`com.example.service.impl` LINE ≥ 60% 未回归）。
 - SSH 终端 E2E（WebSocket + xterm 自动化仍留后续档）
 - 后端终端审计 / 会话回放
 - Vite manualChunks / Web Worker 性能拆分
+
+
+### v2.0-sftp-mvp 实施记录（2026-06-02）
+
+> PRD：`.trellis/tasks/06-02-v2-0-sftp-mvp/prd.md`
+
+**零 schema 变更 / 独立 WebSocket 通道**——复用现有 `client_ssh` 配置、AES 密码解密、JWT query token 和主机权限语义，新增 `/sftp/{clientId}`，不改 `/terminal/{clientId}` shell 协议。
+
+| 新增 / 改动 | 范围 |
+|------------|------|
+| `monitor-server/src/main/java/com/example/websocket/SftpWebSocket.java` | sshj SFTP 端点：目录列表、下载、上传、新建目录、删除文件/空目录；单次传输限制 10 MiB；连接关闭/异常时释放 SFTP 与 SSH 资源 |
+| `monitor-server/src/main/java/com/example/filter/JwtFilter.java` | `/sftp/**` 与 `/terminal/**` 共用 query token 识别和 `PermissionService.canAccessClient` 权限检查 |
+| `monitor-server/src/main/java/com/example/config/SecurityConfiguration.java` | `/sftp/**` 纳入认证路径，保持 WebSocket 握手前鉴权 |
+| `monitor-web/src/component/SftpPanel.vue` | 终端 Tab 内文件面板：目录浏览、上级/刷新、上传、下载、新建目录、删除确认和连接释放 |
+| `monitor-web/src/component/TerminalWindow.vue` | 每个主机 Tab 内增加“终端 / 文件”二级 Tab，SFTP 与 shell 分别使用独立 WebSocket |
+| `monitor-web/src/tools/sftp.js` | SFTP WebSocket URL、远端路径拼接、父路径/文件名解析、base64 浏览器下载工具 |
+| `monitor-web/src/tools/__tests__/sftp.test.js` | 覆盖 SFTP URL、路径工具和浏览器下载触发逻辑 |
+
+**设计决策**：
+- SFTP 使用独立 `/sftp/{clientId}` WebSocket，避免文件传输阻塞或污染 xterm shell 字节流；前端同一主机 Tab 仅做 UI 聚合。
+- 上传/下载采用 base64 JSON 文本，单次限制 10 MiB；大文件分片、断点续传和拖拽上传留给后续任务，避免把 MVP 做成高风险协议改造。
+- 删除目录只支持空目录，服务端调用 `rmdir`，不做递归删除，降低误删风险。
+- SSH 主机校验继续使用 sshj `PromiscuousVerifier`，与现有终端兼容模式一致；日志只记录 host/port/user，不输出密码或 token。
+
+**测试覆盖**：
+- 后端 `mvn -DskipTests compile` 通过；`mvn test` 通过（408 tests）。
+- 前端 `pnpm run lint`、`pnpm run test -- --run`（17 files / 96 tests）和 `pnpm run build` 通过。
+- `pnpm run build` 仍保留既有 Vite 大 chunk warning，拆包留到 v2.0 性能档。
+
+**未做（明确 out-of-scope）**：
+- 大文件分片上传 / 断点续传 / 传输进度条
+- 递归目录删除 / 拖拽上传 / 文件重命名
+- SFTP Playwright E2E（需要真实 SSH/SFTP 测试靶机，独立任务）
+- 终端审计 / 会话回放 / 文件操作审计
 
 
 ---

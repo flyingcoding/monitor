@@ -14,6 +14,7 @@ describe('terminal tab helpers', () => {
       sessionId: 'session-1',
       clientId: 42,
       title: '主机 #42 · 2',
+      panel: 'terminal',
       state: 1,
       loading: true,
       connection: {

@@ -22,6 +22,7 @@ function createTerminalTab(clientId, index, sessionIdFactory = createTerminalSes
     sessionId,
     clientId,
     title: `主机 #${clientId} · ${index}`,
+    panel: 'terminal',
     state: 1,
     loading: true,
     connection: {
