@@ -195,8 +195,8 @@
 | ✅ 指标上报 | **已改为批量上报**（ad2de7e） | — |
 | ✅ 客户端离线补报 | **已实现**（64e973d） | — |
 | ✅ 客户端断线重试 | **已实现**（ff74e87 / efb609f） | — |
-| ✅ 前端图表渲染 | LTTB 采样已实现 | 大数据集可在 v2.0 引入 Web Worker |
-| ✅ 前端首屏包体 | **已完成 Manage route 拆包**（重组件异步加载 + manualChunks） | Web Worker 仍留后续大数据集任务 |
+| ✅ 前端图表渲染 | **LTTB 已迁移到 Web Worker**（RuntimeHistory 数据归一化 + 下采样） | — |
+| ✅ 前端首屏包体 | **已完成 Manage route 拆包**（重组件异步加载 + manualChunks） | — |
 | ⚠️ InfluxDB 写入 | 已有 Resilience4j 断路器，但仍是逐条 | v1.x 增加批量写入 + 写缓冲 |
 | ❌ Redis 缓存层 | 仅限流和验证码 | v1.x 扩展为客户端状态/详情缓存 |
 | ❌ 数据库索引 | 基础索引 | 根据查询模式添加复合索引（v1.1 告警表设计时一并补） |
@@ -430,7 +430,8 @@ P4 (tests 完成) 集成测试（Testcontainers）+ E2E（Playwright 三浏览�
 P4 (terminal 完成) Web 终端多 Tab                                     [v2.0-terminal-tabs] ✅ 2026-06-02
 P4 (sftp 完成) Web 终端 SFTP MVP                                      [v2.0-sftp-mvp] ✅ 2026-06-02
 P4 (performance-frontend 完成) Manage 首屏包体拆分                    [v2.0-performance-frontend-bundle-split] ✅ 2026-06-03
-P4 (剩余)     性能优化（Web Worker / 写缓冲 / Redis 缓存 / 索引）       [v2.0]
+P4 (performance-worker 完成) RuntimeHistory Web Worker 下采样          [v2.0-performance-runtime-history-worker] ✅ 2026-06-03
+P4 (剩余)     性能优化（写缓冲 / Redis 缓存 / 索引）                    [v2.0]
 P5 (长期)     部署体验 → 性能优化 → 多租户                          [v3.0+]
 P6 (可选)     SaaS 模式 → 合规与审计                                [v3.0+]
 ```
@@ -772,6 +773,36 @@ JaCoCo verify 通过（`com.example.service.impl` LINE ≥ 60% 未回归）。
 
 **未做（明确 out-of-scope）**：
 - 前端 LTTB / 大数据集处理迁移到 Web Worker
+- InfluxDB / TSDB 写缓冲与批量写入
+- Redis 客户端状态 / 详情缓存层
+- 查询索引专项优化
+
+
+### v2.0-performance-runtime-history-worker 实施记录（2026-06-03）
+
+> PRD：`.trellis/tasks/06-03-v2-0-performance-runtime-history-worker/prd.md`
+
+**零接口变更 / 图表数据处理移出主线程**——保留 `RuntimeHistoryVO.list[]`、`RuntimeHistory.vue` props 和 ECharts 展示层，新增 Vite module worker 负责运行时历史数据归一化与 LTTB 下采样，主线程只克隆必要字段并应用已采样 payload。
+
+| 新增 / 改动 | 范围 |
+|------------|------|
+| `monitor-web/src/echarts/runtime-history-data.js` | 纯函数：RuntimeHistory 数据归一化、数值单位转换、LTTB 下采样、CPU / 内存 / 网络 / 磁盘 chart payload 构造；默认每图最多 720 点 |
+| `monitor-web/src/echarts/runtime-history.worker.js` | Vite module worker：接收 `{ seq, list, maxPoints }`，返回 `{ seq, payload }`；异常返回 `{ seq, error }` |
+| `monitor-web/src/component/RuntimeHistory.vue` | 使用 `new Worker(new URL(...), { type: 'module' })`；发送 worker 前只克隆图表必要字段；用请求序号丢弃过期响应；Worker 不可用 / postMessage 失败时同步兜底；卸载时终止 worker 和 watcher |
+| `monitor-web/src/echarts/index.js` | `singleSeries` / `doubleSeries` 增加可选 `sampling` 参数，RuntimeHistory 传 `null` 禁用 ECharts 主线程二次 LTTB |
+| `monitor-web/src/echarts/__tests__/runtime-history-data.test.js` | 覆盖归一化单位转换、LTTB 端点保留 / spike 保留、四类图表 payload 最大点数与 series 形状 |
+
+**构建结果**：
+- Vite 产出独立 worker 资源：`runtime-history.worker-*.js` 2.11 kB。
+- `RuntimeHistory-*.js`：5.99 kB / gzip 2.62 kB。
+- `Manage-*.js`：仍为 9.01 kB / gzip 3.92 kB，未回退到大 chunk。
+
+**测试覆盖**：
+- 前端 `pnpm run lint` 通过。
+- 前端 `pnpm run test -- --run` 通过（18 files / 99 tests）。
+- 前端 `pnpm run build` 通过，已确认 worker 资源输出。
+
+**未做（明确 out-of-scope）**：
 - InfluxDB / TSDB 写缓冲与批量写入
 - Redis 客户端状态 / 详情缓存层
 - 查询索引专项优化

@@ -5,6 +5,13 @@ import { CanvasRenderer } from 'echarts/renderers'
 
 echarts.use([LineChart, GridComponent, TooltipComponent, DataZoomComponent, CanvasRenderer])
 
+/**
+ * Build the common ECharts line-chart option used by runtime history panels.
+ *
+ * @param {string} name Y-axis title
+ * @param {Array<*>} dataX X-axis labels
+ * @returns {object} ECharts option
+ */
 function defaultOption(name, dataX) {
   return {
     tooltip: {
@@ -57,79 +64,117 @@ function defaultOption(name, dataX) {
   }
 }
 
-function singleSeries(option, name, dataY, colors) {
+/**
+ * Add ECharts sampling only when the caller did not pre-sample the series.
+ *
+ * @param {object} series ECharts line series option
+ * @param {string|null} sampling Sampling strategy, or null to disable ECharts sampling
+ * @returns {object} Series option with optional sampling
+ */
+function withSampling(series, sampling) {
+  if (sampling) {
+    series.sampling = sampling
+  }
+  return series
+}
+
+/**
+ * Attach a single line series to a chart option.
+ *
+ * @param {object} option ECharts option mutated in place
+ * @param {string} name Series name
+ * @param {Array<number>} dataY Series data
+ * @param {Array<string>} colors Line and area colors
+ * @param {string|null} sampling ECharts sampling strategy, or null for pre-sampled data
+ */
+function singleSeries(option, name, dataY, colors, sampling = 'lttb') {
   option.series = [
-    {
-      name: name,
-      type: 'line',
-      sampling: 'lttb',
-      showSymbol: false,
-      itemStyle: {
-        color: colors[0]
+    withSampling(
+      {
+        name: name,
+        type: 'line',
+        showSymbol: false,
+        itemStyle: {
+          color: colors[0]
+        },
+        areaStyle: {
+          color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+            {
+              offset: 0,
+              color: colors[1]
+            },
+            {
+              offset: 1,
+              color: colors[2]
+            }
+          ])
+        },
+        data: dataY
       },
-      areaStyle: {
-        color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-          {
-            offset: 0,
-            color: colors[1]
-          },
-          {
-            offset: 1,
-            color: colors[2]
-          }
-        ])
-      },
-      data: dataY
-    }
+      sampling
+    )
   ]
 }
 
-function doubleSeries(option, name, dataY, colors) {
+/**
+ * Attach two line series to a chart option.
+ *
+ * @param {object} option ECharts option mutated in place
+ * @param {Array<string>} name Series names
+ * @param {Array<Array<number>>} dataY Series data arrays
+ * @param {Array<Array<string>>} colors Line and area colors for each series
+ * @param {string|null} sampling ECharts sampling strategy, or null for pre-sampled data
+ */
+function doubleSeries(option, name, dataY, colors, sampling = 'lttb') {
   option.series = [
-    {
-      name: name[0],
-      type: 'line',
-      sampling: 'lttb',
-      showSymbol: false,
-      itemStyle: {
-        color: colors[0][0]
+    withSampling(
+      {
+        name: name[0],
+        type: 'line',
+        showSymbol: false,
+        itemStyle: {
+          color: colors[0][0]
+        },
+        areaStyle: {
+          color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+            {
+              offset: 0,
+              color: colors[0][1]
+            },
+            {
+              offset: 1,
+              color: colors[0][2]
+            }
+          ])
+        },
+        data: dataY[0]
       },
-      areaStyle: {
-        color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-          {
-            offset: 0,
-            color: colors[0][1]
-          },
-          {
-            offset: 1,
-            color: colors[0][2]
-          }
-        ])
+      sampling
+    ),
+    withSampling(
+      {
+        name: name[1],
+        type: 'line',
+        showSymbol: false,
+        itemStyle: {
+          color: colors[1][0]
+        },
+        areaStyle: {
+          color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+            {
+              offset: 0,
+              color: colors[1][1]
+            },
+            {
+              offset: 1,
+              color: colors[1][2]
+            }
+          ])
+        },
+        data: dataY[1]
       },
-      data: dataY[0]
-    },
-    {
-      name: name[1],
-      type: 'line',
-      sampling: 'lttb',
-      showSymbol: false,
-      itemStyle: {
-        color: colors[1][0]
-      },
-      areaStyle: {
-        color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-          {
-            offset: 0,
-            color: colors[1][1]
-          },
-          {
-            offset: 1,
-            color: colors[1][2]
-          }
-        ])
-      },
-      data: dataY[1]
-    }
+      sampling
+    )
   ]
 }
 
