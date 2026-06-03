@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { get, post } from '@/net'
 import { withQuery } from '@/net/query'
 import { createReconnectingEventSource } from '@/net/sse'
@@ -13,13 +13,16 @@ import {
 } from '@/tools'
 import { downloadCsv } from '@/tools/csv'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import RuntimeHistory from '@/component/RuntimeHistory.vue'
-import Gpus from '@/component/Gpus.vue'
-import Processes from '@/component/Processes.vue'
-import SmartHealth from '@/component/SmartHealth.vue'
-import SystemdServices from '@/component/SystemdServices.vue'
 import { Connection, Delete, Download } from '@element-plus/icons-vue'
 import { SERVER_LOCATIONS as locations } from '@/tools/locations'
+
+// 详情页二级模块按能力和数据状态懒加载，避免主机详情打开前拉入 ECharts 和能力 Tab 代码。
+const RuntimeHistory = defineAsyncComponent(() => import('@/component/RuntimeHistory.vue'))
+const Gpus = defineAsyncComponent(() => import('@/component/Gpus.vue'))
+const Processes = defineAsyncComponent(() => import('@/component/Processes.vue'))
+const SmartHealth = defineAsyncComponent(() => import('@/component/SmartHealth.vue'))
+const SystemdServices = defineAsyncComponent(() => import('@/component/SystemdServices.vue'))
+
 const props = defineProps({
   id: Number,
   update: Function
@@ -591,8 +594,12 @@ watch(() => props.id, init, { immediate: true })
                 导出 CSV
               </el-button>
             </div>
-            <runtime-history style="margin-top: 20px" :data="details.runtime.list" />
-            <el-empty description="暂无实时数据" v-if="!details.runtime.list.length" />
+            <runtime-history
+              v-if="details.runtime.list.length"
+              style="margin-top: 20px"
+              :data="details.runtime.list"
+            />
+            <el-empty description="暂无实时数据" v-else />
           </template>
         </div>
         <el-empty description="服务器处于离线状态，请检查服务器是否正常运行" v-else />

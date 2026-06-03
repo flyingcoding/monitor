@@ -196,6 +196,7 @@
 | ✅ 客户端离线补报 | **已实现**（64e973d） | — |
 | ✅ 客户端断线重试 | **已实现**（ff74e87 / efb609f） | — |
 | ✅ 前端图表渲染 | LTTB 采样已实现 | 大数据集可在 v2.0 引入 Web Worker |
+| ✅ 前端首屏包体 | **已完成 Manage route 拆包**（重组件异步加载 + manualChunks） | Web Worker 仍留后续大数据集任务 |
 | ⚠️ InfluxDB 写入 | 已有 Resilience4j 断路器，但仍是逐条 | v1.x 增加批量写入 + 写缓冲 |
 | ❌ Redis 缓存层 | 仅限流和验证码 | v1.x 扩展为客户端状态/详情缓存 |
 | ❌ 数据库索引 | 基础索引 | 根据查询模式添加复合索引（v1.1 告警表设计时一并补） |
@@ -428,7 +429,8 @@ P4 (frontend 完成) Dashboard 时间范围 + CSV 导出 + Notification 补齐 [
 P4 (tests 完成) 集成测试（Testcontainers）+ E2E（Playwright 三浏览器） [v2.0-tests] ✅ 2026-06-01
 P4 (terminal 完成) Web 终端多 Tab                                     [v2.0-terminal-tabs] ✅ 2026-06-02
 P4 (sftp 完成) Web 终端 SFTP MVP                                      [v2.0-sftp-mvp] ✅ 2026-06-02
-P4 (剩余)     性能优化                                                  [v2.0]
+P4 (performance-frontend 完成) Manage 首屏包体拆分                    [v2.0-performance-frontend-bundle-split] ✅ 2026-06-03
+P4 (剩余)     性能优化（Web Worker / 写缓冲 / Redis 缓存 / 索引）       [v2.0]
 P5 (长期)     部署体验 → 性能优化 → 多租户                          [v3.0+]
 P6 (可选)     SaaS 模式 → 合规与审计                                [v3.0+]
 ```
@@ -743,6 +745,36 @@ JaCoCo verify 通过（`com.example.service.impl` LINE ≥ 60% 未回归）。
 - 递归目录删除 / 拖拽上传 / 文件重命名
 - SFTP Playwright E2E（需要真实 SSH/SFTP 测试靶机，独立任务）
 - 终端审计 / 会话回放 / 文件操作审计
+
+
+### v2.0-performance-frontend-bundle-split 实施记录（2026-06-03）
+
+> PRD：`.trellis/tasks/06-03-v2-0-performance-frontend-bundle-split/prd.md`
+
+**零接口变更 / 首屏加载边界收敛**——保留管理页、详情抽屉、注册抽屉、终端和 SFTP 的现有 props/events/接口语义，仅调整组件加载时机与 Vite chunk 策略，解决 `Manage` route chunk 过大的构建告警。
+
+| 改动 | 范围 |
+|------|------|
+| `monitor-web/src/views/tabs/Manage.vue` | `ClientDetails` / `RegisterCard` / `TerminalWindow` 改为 `defineAsyncComponent`；隐藏抽屉内容增加 `v-if` 挂载门，避免首屏实例化详情图表和终端代码 |
+| `monitor-web/src/component/ClientDetails.vue` | `RuntimeHistory` / GPU / 进程 / SMART / systemd 模块改为异步组件；运行时图表仅在有历史数据时挂载 |
+| `monitor-web/src/component/TerminalWindow.vue` | `Terminal` 和 `SftpPanel` 改为异步组件，保持 shell 连接态和 SFTP 文件页才加载对应 WebSocket 组件 |
+| `monitor-web/vite.config.js` | 增加 `build.rollupOptions.output.manualChunks`，拆分 Vue、Element Plus、ECharts、xterm、flag-icons 和剩余 vendor chunk |
+
+**构建结果**：
+- `Manage-*.js`：本次构建为 **9.01 kB / gzip 3.92 kB**，已从 SFTP 阶段记录的约 845 kB 路由大块中拆出。
+- 主要 vendor chunk：`vendor-echarts` 496.98 kB、`vendor-element-plus` 443.65 kB、`vendor-xterm` 292.30 kB，均低于 Vite 默认大 chunk warning 阈值。
+- `pnpm run build` 已无大 chunk warning。
+
+**测试覆盖**：
+- 前端 `pnpm run lint` 通过。
+- 前端 `pnpm run test -- --run` 通过（17 files / 96 tests）。
+- 前端 `pnpm run build` 通过。
+
+**未做（明确 out-of-scope）**：
+- 前端 LTTB / 大数据集处理迁移到 Web Worker
+- InfluxDB / TSDB 写缓冲与批量写入
+- Redis 客户端状态 / 详情缓存层
+- 查询索引专项优化
 
 
 ---

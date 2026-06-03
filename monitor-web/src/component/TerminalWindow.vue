@@ -1,15 +1,17 @@
 <script setup>
-import { reactive, ref, watch } from 'vue'
+import { defineAsyncComponent, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { get, post } from '@/net'
 import { withQuery } from '@/net/query'
-import SftpPanel from '@/component/SftpPanel.vue'
-import Terminal from '@/component/Terminal.vue'
 import {
   createTerminalTab,
   nextClientSessionIndex,
   resolveNextActiveTabName
 } from '@/tools/terminal-tabs'
+
+// 终端和 SFTP 都带独立 WebSocket/大依赖，等用户真正进入连接态或文件页再加载。
+const Terminal = defineAsyncComponent(() => import('@/component/Terminal.vue'))
+const SftpPanel = defineAsyncComponent(() => import('@/component/SftpPanel.vue'))
 
 const props = defineProps({
   id: Number,

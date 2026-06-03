@@ -1,15 +1,17 @@
 <script setup>
 import PreviewCard from '@/component/PreviewCard.vue'
-import { computed, onBeforeUnmount, reactive, ref } from 'vue'
+import { computed, defineAsyncComponent, onBeforeUnmount, reactive, ref } from 'vue'
 import { get } from '@/net'
-import ClientDetails from '@/component/ClientDetails.vue'
-import RegisterCard from '@/component/RegisterCard.vue'
 import { Plus } from '@element-plus/icons-vue'
 import { useRoute } from 'vue-router'
 import { useStore } from '@/store'
-import TerminalWindow from '@/component/TerminalWindow.vue'
 import { createReconnectingEventSource } from '@/net/sse'
 import { SERVER_LOCATIONS as locations } from '@/tools/locations'
+
+// 抽屉内容只在打开时加载，避免管理页首屏拉入详情图表、终端和 SFTP 依赖。
+const ClientDetails = defineAsyncComponent(() => import('@/component/ClientDetails.vue'))
+const RegisterCard = defineAsyncComponent(() => import('@/component/RegisterCard.vue'))
+const TerminalWindow = defineAsyncComponent(() => import('@/component/TerminalWindow.vue'))
 
 const store = useStore()
 const list = ref([])
@@ -154,6 +156,7 @@ const terminal = reactive({
       @close="detail.id = -1"
     >
       <client-details
+        v-if="detail.show && detail.id !== -1"
         :id="detail.id"
         :update="updateList"
         @delete="updateList"
@@ -168,7 +171,7 @@ const terminal = reactive({
       size="320"
       @open="refreshToken"
     >
-      <register-card :token="register.token" />
+      <register-card v-if="register.show" :token="register.token" />
     </el-drawer>
     <el-drawer
       style="width: 800px"
@@ -186,7 +189,11 @@ const terminal = reactive({
           </div>
         </div>
       </template>
-      <terminal-window :id="terminal.id" :open-key="terminal.openKey" />
+      <terminal-window
+        v-if="terminal.show && terminal.id !== -1"
+        :id="terminal.id"
+        :open-key="terminal.openKey"
+      />
     </el-drawer>
   </div>
 </template>
