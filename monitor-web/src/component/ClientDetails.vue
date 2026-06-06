@@ -124,8 +124,8 @@ function updateDetails() {
  * 删除当前主机，并在删除成功后通知父组件关闭详情。
  */
 function deleteClient() {
-  ElMessageBox.confirm('删除此主机后所有统计数据都将丢失，您确定要这样做吗？', '删除主机', {
-    confirmButtonText: '确定',
+  ElMessageBox.confirm('将移除此主机记录、SSH 配置、告警规则/历史和公开状态页引用；时序历史数据会保留。确定删除吗？', '删除主机', {
+    confirmButtonText: '删除',
     cancelButtonText: '取消',
     type: 'warning'
   })

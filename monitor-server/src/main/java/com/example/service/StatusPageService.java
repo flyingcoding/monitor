@@ -38,4 +38,12 @@ public interface StatusPageService extends IService<StatusPageConfig> {
      * @return 更新后的配置（含候选客户端列表）
      */
     StatusPageConfigVO updateConfig(StatusPageConfigUpdateVO vo);
+
+    /**
+     * Evict the public status-page summary cache.
+     *
+     * <p>Used by config-reference cleanup paths such as client deletion that bypass
+     * {@link #updateConfig(StatusPageConfigUpdateVO)}.
+     */
+    void evictSummaryCache();
 }

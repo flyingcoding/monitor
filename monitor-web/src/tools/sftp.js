@@ -1,20 +1,4 @@
-import { withQuery } from '@/net/query'
-
 const MAX_SFTP_TRANSFER_BYTES = 10 * 1024 * 1024
-
-/**
- * 构建 SFTP WebSocket URL。
- *
- * @param {string} baseUrl WebSocket 基础地址
- * @param {number} clientId 主机 ID
- * @param {string} token JWT 访问令牌
- * @param {string} sessionId 前端会话 ID
- * @returns {string} SFTP WebSocket URL
- */
-function buildSftpSocketUrl(baseUrl, clientId, token, sessionId) {
-  const normalizedBaseUrl = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl
-  return withQuery(`${normalizedBaseUrl}/sftp/${clientId}`, { token, sessionId })
-}
 
 /**
  * 拼接远端路径，避免重复斜杠。
@@ -82,7 +66,6 @@ function downloadBase64File(contentBase64, filename) {
 
 export {
   MAX_SFTP_TRANSFER_BYTES,
-  buildSftpSocketUrl,
   joinRemotePath,
   parentRemotePath,
   remoteFileName,

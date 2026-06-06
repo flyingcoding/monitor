@@ -37,12 +37,19 @@ class CorsFilterTest {
     }
 
     /**
-     * 空字符串配置（夸张容错路径）也降级为通配。
+     * Blank CORS config disables permissive ACAO headers.
      */
     @Test
-    void blankConfigDefaultsToWildcard() {
+    void blankConfigShouldNotWriteAcao() throws Exception {
         CorsFilter f = newCorsFilter("");
-        Assertions.assertTrue(f.isWildcardForTest());
+        Assertions.assertFalse(f.isWildcardForTest());
+        Assertions.assertTrue(f.getOriginWhitelistForTest().isEmpty());
+
+        Map<String, String> respHeaders = new HashMap<>();
+        f.doFilter(stubReq("https://client.example.com"), stubResp(respHeaders), (req, resp) -> {});
+
+        Assertions.assertFalse(respHeaders.containsKey("Access-Control-Allow-Origin"),
+                "空 CORS 配置不应降级为通配跨域");
     }
 
     /**

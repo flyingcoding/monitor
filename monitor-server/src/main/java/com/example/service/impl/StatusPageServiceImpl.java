@@ -123,6 +123,11 @@ public class StatusPageServiceImpl
         return toAdminVO(config);
     }
 
+    @Override
+    public void evictSummaryCache() {
+        summaryCache().invalidateAll();
+    }
+
     /**
      * 实际计算汇总；仅在 {@link #summaryCache()} 缓存未命中时调用。
      *

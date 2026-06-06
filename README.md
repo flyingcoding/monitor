@@ -1,58 +1,133 @@
 # 运维监控系统
 
-本系统分为服务端和客户端，客户端需要向服务端进行注册，注册完成后即可向服务端进行数据上报，由服务端实时处理客户端上报的监控数据，并以图表形式在前端展示，同时用户也可以使用前端页面进行快捷SSH登录操作，便于对服务端的远程管理。
+这是一个中文友好的自托管轻量监控平台，包含服务端、主机 Agent 和 Vue 管理端。当前实现已经进入 v2.0 阶段：支持主机指标采集、告警、通知通道、公开状态页、OIDC/API Token、OTLP 接收、InfluxDB/VictoriaMetrics 双时序后端、Web SSH 多 Tab、SFTP MVP、集成测试与 E2E 测试。
 
-## 客户端
+## 模块
 
-客户端是安装在需要监控主机上的软件程序，开启后自动进行数据收集并完成上报。
+| 模块 | 说明 |
+| --- | --- |
+| `monitor-server/` | Spring Boot 3.5.10 + Java 21 后端，提供 REST API、WebSocket/SSE、告警、OIDC、API Token、状态页、探测任务、Flyway 迁移和 TSDB 适配层。 |
+| `monitor-client/` | Java 21 主机 Agent，使用 OSHI 采集指标，maven-shade 打包为单 jar。短期断网补报使用进程内队列，重启后不会保留。 |
+| `monitor-web/` | Vue 3 + Vite + Element Plus 前端，包含 Dashboard、主机详情、告警、状态页配置、安全设置、Web SSH 多 Tab 和 SFTP 面板。 |
 
-1. 客户端需要先向服务端进行注册，注册完成后才能开始使用。
-2. 客户端通过定时任务不断收集当前机器运行数据，并上报给服务端。
-3. Web界面可以配合服务端实现SSH远程控制交互。
+## 当前能力
 
-客户端技术栈：
+- 主机指标：CPU、内存、磁盘、网络、磁盘 IO，支持批量上报和 TSDB 历史查询。
+- 可选采集：进程、NVIDIA GPU、SMART、systemd 服务，能力通过 `client_detail.capabilities_json` 上报。
+- 实时通道：SSE 推送主机列表、runtime、告警和可选采集快照；WebSocket 提供 SSH shell 与 SFTP。
+- 告警体系：阈值规则、告警历史、确认/恢复、邮件/Webhook/钉钉/飞书通知。
+- 安全：JWT、管理员/子账户权限、API Token、OIDC/SSO、密码策略、请求日志脱敏、SSH/OIDC/探测敏感字段加密。
+- 状态页：公开 `/status` 页面，默认关闭，管理员必须显式选择公开的客户端。
+- 时序后端：默认 InfluxDB 2.7，可切换 VictoriaMetrics，支持 JSONL 缓冲和重放。
+- 测试：后端 Surefire 单测、Failsafe + Testcontainers 集成测试、前端 Vitest、Playwright 三浏览器 E2E。
 
-* 采用SpringBoot 3最新版作为基础框架
-* 采用oshi框架实现跨平台硬件实时运行数据读取
-* 采用SpringQuartz实现定时任务调度
-* 采用JSON存储服务端连接信息
+## 快速启动
 
-## 服务端
+初始化环境变量：
 
-服务端需要对客户端提供的监控数据进行整理，生成一个可供前端折线图展示的时间段数据集，并实时进行更新，利用缓存技术对数据获取进行优化等等。
+```bash
+cp .env.example .env
+bash scripts/generate-env.sh
+```
 
-1. 服务端需要保存所有客户端信息，让客户端可以注册。
-2. 服务端需要接收并处理客户端发来的监控数据，方便前端快捷查看。
-3. 客户端支持多账户，可以进行权限配置，不同服务器可以由不同账户进行管理。
+启动完整本地依赖和应用容器：
 
-服务端技术栈：
+```bash
+docker compose up -d --build
+```
 
-* 采用JSCH框架实现远程SSH连接
-* 采用WebSocket与前端对接实现前端Shell操作
-* 采用InfluxDB实现服务器监控历史信息存储效率更高
-* 采用Mybatis-Plus作为持久层框架，使用更便捷
-* 采用Redis存储注册/重置操作验证码，带过期时间控制
-* 采用RabbitMQ积压短信发送任务，再由监听器统一处理
-* 采用SpringSecurity作为权限校验框架，手动整合Jwt校验方案
-* 采用Redis进行IP地址限流处理，防刷接口
-* 视图层对象和数据层对象分离，编写工具方法利用反射快速互相转换
-* 错误和异常页面统一采用JSON格式返回，前端处理响应更统一
-* 手动处理跨域，采用过滤器实现
-* 使用Swagger作为接口文档自动生成，已自动配置登录相关接口
-* 采用过滤器实现对所有请求自动生成雪花ID方便线上定位问题
-* 针对于多环境进行处理，开发环境和生产环境采用不同的配置
-* 日志中包含单次请求完整信息以及对应的雪花ID，支持文件记录
-* 项目整体结构清晰，职责明确，注释全面，开箱即用
+开发模式常用命令：
 
-## 网页端
+```bash
+make dev-server
+cd monitor-client && mvn spring-boot:run
+cd monitor-web && pnpm install && pnpm run dev
+```
 
-网页端用于展示所有服务器数据，以及实时更新服务器运行时状态，配合后端完成前端伪SSH终端，快捷方便对服务器进行管理，支持子账户分权限管理等。
+直接运行 `monitor-server` 前需先在仓库根目录加载 `.env`，例如 `set -a; source .env; set +a`。dev profile 的 MySQL、Redis、RabbitMQ 和 InfluxDB 密码默认值为空，本地 Docker 依赖使用 `scripts/generate-env.sh` 生成的 `.env` 密码。
 
-前端技术栈：
+Makefile 快捷命令：
 
-* 采用Vue3构建
-*  采用ElementUI作为UI框架
-* 采用Fontawsome作为图标库
-* 采用Xterm.js作为前端伪终端实现
-* 子账户权限控制
-* 暗黑模式适配
+```bash
+make init
+make up
+make dev-server
+make up-client
+make up-vm
+make migrate-influx-to-vm
+make clean
+```
+
+`make dev-server` 会加载根目录 `.env` 后启动后端；`make up-client` 需要 `.env` 中配置 `MONITOR_TOKEN`，该值来自管理端的客户端注册令牌。
+
+## 配置要点
+
+`.env.example` 使用偏安全默认值：
+
+- `CORS_ORIGIN=`：生产环境应填写精确 origin，例如 `https://monitor.example.com`。本地联调如需开放可显式设为 `*`。
+- `PASSWORD_POLICY=basic`：生产默认要求至少 8 位且包含字母和数字。本地调试如需放宽可设为 `none`。
+- `JWT_KEY`、`API_TOKEN_HMAC_KEY`、`SSH_ENCRYPT_KEY` 必须使用彼此不同的强随机密钥。
+- `MAIL_USERNAME` / `MAIL_PASSWORD` 是通知与验证码邮件凭证，不应提交真实值。
+- `MONITOR_TSDB_PROVIDER=influxdb|victoria-metrics` 控制时序后端。
+
+`monitor-server/src/main/resources/application-dev.yml` 只保留本地 Docker 默认或空占位；真实生产配置应通过环境变量注入，生产 profile 不依赖硬编码凭证。
+
+## 数据库
+
+应用 schema 的唯一事实源是 Flyway：
+
+```text
+monitor-server/src/main/resources/db/migration/
+├── V1__init.sql
+├── V2__alert.sql
+├── V3__v1-2-security.sql
+├── V4__v1-3-monitoring.sql
+└── V5__v2-0-performance-indexes.sql
+```
+
+根目录 `database.sql` 只用于可选地创建 `monitor` 数据库，不包含业务表，也不包含 `DROP TABLE`。不要把它当成应用 schema 初始化脚本；服务启动时由 Flyway 自动建表/迁移。
+
+## 删除主机合同
+
+管理端删除主机是 MySQL 侧硬删除：
+
+- 删除 `client`、`client_detail`、`client_ssh`。
+- 删除绑定该主机的 `alert_rule` 和 `alert_history`。
+- 从 `status_page_config.client_ids` 和子账户 `account.clients` 中移除该主机 ID。
+- 清理服务端本地 runtime/heartbeat/client token 缓存并推送主机列表刷新。
+- 保留 InfluxDB/VictoriaMetrics 中的 TSDB 历史数据；如需物理清理时序历史，应另开带保留策略和回滚方案的任务。
+
+## 测试与验证
+
+后端：
+
+```bash
+cd monitor-server && mvn test
+cd monitor-server && mvn verify
+```
+
+`mvn verify` 会运行 Failsafe 集成测试和 JaCoCo 检查。无 Docker 时 Testcontainers 集成测试会按配置跳过或失败，具体看测试类标注。
+
+客户端：
+
+```bash
+cd monitor-client && mvn test
+```
+
+前端：
+
+```bash
+cd monitor-web && pnpm run lint
+cd monitor-web && pnpm run test -- --run
+cd monitor-web && pnpm run build
+cd monitor-web && pnpm run e2e
+```
+
+## 文档索引
+
+- `EVOLUTION.md`：当前路线图、已交付能力和剩余任务。
+- `docs/engineering.md`：版本化工程规范和跨模块合同。
+- `docs/v2.0-alpha-otlp.md`：OTLP 接收端点与 TSDB 适配层。
+- `docs/v2.0-beta-vm.md`：VictoriaMetrics 切换与 vmctl 迁移。
+- `docs/v2.0-tests.md`：集成测试与 E2E 测试体系。
+- `PROJECT_REVIEW_ISSUES.md`：2026-06-06 项目 review 问题清单。

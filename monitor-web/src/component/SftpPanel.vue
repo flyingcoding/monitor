@@ -1,10 +1,9 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { takeAccessToken } from '@/net'
+import { buildSftpSocketUrl, closeManagedWebSocket, createManagedWebSocket } from '@/net/ws'
 import {
   MAX_SFTP_TRANSFER_BYTES,
-  buildSftpSocketUrl,
   downloadBase64File,
   joinRemotePath,
   parentRemotePath,
@@ -31,15 +30,12 @@ let disposed = false
 const readableLimit = computed(() => `${MAX_SFTP_TRANSFER_BYTES / 1024 / 1024} MiB`)
 
 /**
- * 构建当前主机的 SFTP WebSocket 地址，复用登录 JWT。
+ * Build the current client SFTP WebSocket URL through the shared auth helper.
  *
  * @returns {string|null} SFTP WebSocket 地址；未登录时返回 null
  */
 function buildSocketUrl() {
-  const token = takeAccessToken()
-  if (!token) return null
-  const wsBaseUrl = import.meta.env.VITE_WS_BASE_URL || `ws://${window.location.host}`
-  return buildSftpSocketUrl(wsBaseUrl, props.clientId, token, props.sessionId)
+  return buildSftpSocketUrl(props.clientId, props.sessionId)
 }
 
 /**
@@ -52,23 +48,24 @@ function connect() {
     return
   }
   loading.value = true
-  socket = new WebSocket(socketUrl)
-  socket.onopen = () => {
-    connected.value = true
-  }
-  socket.onmessage = (event) => handleSocketMessage(event.data)
-  socket.onerror = () => {
-    loading.value = false
-    ElMessage.error('SFTP 连接异常')
-  }
-  socket.onclose = (event) => {
-    connected.value = false
-    loading.value = false
-    socket = null
-    if (!disposed && event.reason) {
-      ElMessage.warning(event.reason)
+  socket = createManagedWebSocket(socketUrl, {
+    onopen: () => {
+      connected.value = true
+    },
+    onmessage: (event) => handleSocketMessage(event.data),
+    onerror: () => {
+      loading.value = false
+      ElMessage.error('SFTP 连接异常')
+    },
+    onclose: (event) => {
+      connected.value = false
+      loading.value = false
+      socket = null
+      if (!disposed && event.reason) {
+        ElMessage.warning(event.reason)
+      }
     }
-  }
+  })
 }
 
 /**
@@ -265,10 +262,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   disposed = true
-  if (socket) {
-    socket.close()
-    socket = null
-  }
+  socket = closeManagedWebSocket(socket)
 })
 </script>
 

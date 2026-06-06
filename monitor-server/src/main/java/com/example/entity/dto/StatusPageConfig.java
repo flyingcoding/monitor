@@ -10,9 +10,8 @@ import java.util.Date;
  * 公开状态页配置（单行表 {@code id = 1}）。对应 {@code status_page_config} 表。
  *
  * <p>v1.2 仅支持单状态页（PRD Out of Scope 已声明）。{@code clientIds} 是逗号分隔的客户端 ID 列表
- * （同 {@code account.clients} 模式），空字符串 / {@code null} 时含义"所有客户端"或"无任何客户端"由
- * {@code StatusPageService} 显式定义：{@code clientIds == null} → 公开所有，
- * {@code clientIds == ""} → 公开零个（管理员主动留空）。
+ * （同 {@code account.clients} 模式）。当前采用 default-deny：{@code clientIds == null} 或空字符串
+ * 都表示未公开任何客户端，管理员必须显式选择客户端后才会对访客展示。
  */
 @Data
 @TableName("status_page_config")
@@ -42,8 +41,7 @@ public class StatusPageConfig {
     String logoUrl;
 
     /**
-     * 公开客户端 ID 列表，逗号分隔。{@code null} 表示尚未配置（公开所有），
-     * 空字符串表示明确公开零个客户端。
+     * 公开客户端 ID 列表，逗号分隔。{@code null} 或空字符串都表示未公开任何客户端。
      */
     String clientIds;
 

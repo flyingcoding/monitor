@@ -49,7 +49,11 @@ down-vm:
 	docker compose --profile vm rm -f victoria-metrics
 
 dev-server:
-	cd monitor-server && mvn spring-boot:run -Pdev
+	@if [ ! -f .env ]; then \
+		echo "未找到 .env，请先执行 make init"; \
+		exit 1; \
+	fi
+	@set -a; . ./.env; set +a; cd monitor-server && mvn spring-boot:run -Pdev
 
 dev-web:
 	cd monitor-web && pnpm install && pnpm run dev
@@ -68,6 +72,7 @@ logs-vm:
 clean:
 	docker compose down -v
 	cd monitor-server && mvn clean
+	cd monitor-client && mvn clean
 	@if command -v trash >/dev/null 2>&1; then \
 		if [ -e monitor-web/dist ]; then \
 			trash monitor-web/dist; \

@@ -1,19 +1,29 @@
 package com.example.service.impl;
 
+import com.alibaba.fastjson2.JSONArray;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.example.entity.dto.Account;
+import com.example.entity.dto.AlertHistory;
+import com.example.entity.dto.AlertRule;
 import com.example.entity.dto.Client;
 import com.example.entity.dto.ClientDetail;
 import com.example.entity.dto.ClientSsh;
+import com.example.entity.dto.StatusPageConfig;
 import com.example.entity.vo.request.*;
 import com.example.entity.vo.response.*;
+import com.example.mapper.AccountMapper;
+import com.example.mapper.AlertHistoryMapper;
+import com.example.mapper.AlertRuleMapper;
 import com.example.mapper.ClientDetailMapper;
 import com.example.mapper.ClientMapper;
 import com.example.mapper.ClientSshMapper;
+import com.example.mapper.StatusPageConfigMapper;
 import com.example.mapper.struct.ClientStructMapper;
 import com.example.service.AlertEvaluator;
 import com.example.service.ClientService;
 import com.example.config.SseEventBus;
+import com.example.service.StatusPageService;
 import com.example.tsdb.TimeSeriesAdapter;
 import com.example.utils.CryptoUtils;
 import com.github.benmanes.caffeine.cache.Cache;
@@ -24,6 +34,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.BeanUtils;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.security.SecureRandom;
 import java.time.Instant;
@@ -61,6 +72,14 @@ public class ClientServiceImpl extends ServiceImpl<ClientMapper, Client> impleme
     @Resource
     private ClientSshMapper clientSshMapper;
     @Resource
+    private AlertRuleMapper alertRuleMapper;
+    @Resource
+    private AlertHistoryMapper alertHistoryMapper;
+    @Resource
+    private StatusPageConfigMapper statusPageConfigMapper;
+    @Resource
+    private AccountMapper accountMapper;
+    @Resource
     private ClientStructMapper clientStructMapper;
     @Resource
     private CryptoUtils cryptoUtils;
@@ -68,6 +87,10 @@ public class ClientServiceImpl extends ServiceImpl<ClientMapper, Client> impleme
     @Lazy
     @Resource
     private AlertEvaluator alertEvaluator;
+
+    @Lazy
+    @Resource
+    private StatusPageService statusPageService;
 
     @PostConstruct
     public void initClientCache() {
@@ -294,12 +317,32 @@ public class ClientServiceImpl extends ServiceImpl<ClientMapper, Client> impleme
     }
 
     @Override
+    @Transactional
     public void deleteClient(int clientId) {
-        this.removeById(clientId);
-        baseMapper.deleteById(clientId);
-        this.initClientCache();
-        currentRuntime.invalidate(clientId);
-        heartbeatMap.remove(clientId);
+        Client existing = this.getById(clientId);
+        if (existing == null) {
+            this.invalidateUnknownLocalClientState(clientId);
+            return;
+        }
+
+        clientDetailMapper.deleteById(clientId);
+        clientSshMapper.deleteById(clientId);
+        alertHistoryMapper.delete(Wrappers.<AlertHistory>lambdaQuery()
+                .eq(AlertHistory::getClientId, clientId));
+        alertRuleMapper.delete(Wrappers.<AlertRule>lambdaQuery()
+                .eq(AlertRule::getClientId, clientId));
+
+        boolean statusPageChanged = removeClientFromStatusPageConfig(clientId);
+        int accountReferencesRemoved = removeClientFromAccountPermissions(clientId);
+        boolean removed = this.removeById(clientId);
+
+        this.invalidateLocalClientState(clientId, existing.getToken());
+        if (statusPageChanged) {
+            statusPageService.evictSummaryCache();
+        }
+        sseEventBus.publishClientList();
+        log.info("客户端删除完成 clientId={} removed={} accountReferencesRemoved={} tsdbHistoryRetained=true",
+                clientId, removed, accountReferencesRemoved);
     }
 
     /**
@@ -423,6 +466,112 @@ public class ClientServiceImpl extends ServiceImpl<ClientMapper, Client> impleme
     private void addClientCache(Client client) {
         clientIdCache.put(client.getId(), client);
         clientTokenCache.put(client.getToken(), client);
+    }
+
+    /**
+     * Invalidate all local cache state for a deleted client.
+     *
+     * @param clientId client ID
+     * @param token    client token, nullable when unknown
+     */
+    private void invalidateLocalClientState(int clientId, String token) {
+        clientIdCache.invalidate(clientId);
+        if (token != null && !token.isBlank()) {
+            clientTokenCache.invalidate(token);
+        }
+        currentRuntime.invalidate(clientId);
+        heartbeatMap.remove(clientId);
+    }
+
+    /**
+     * Invalidate local state when the client row is already gone and the token is unknown.
+     *
+     * @param clientId client ID
+     */
+    private void invalidateUnknownLocalClientState(int clientId) {
+        clientIdCache.invalidate(clientId);
+        clientTokenCache.invalidateAll();
+        currentRuntime.invalidate(clientId);
+        heartbeatMap.remove(clientId);
+    }
+
+    /**
+     * Remove the deleted client ID from the public status-page configuration.
+     *
+     * @param clientId client ID
+     * @return whether the configuration changed
+     */
+    private boolean removeClientFromStatusPageConfig(int clientId) {
+        StatusPageConfig config = statusPageConfigMapper.selectById(1);
+        if (config == null || config.getClientIds() == null || config.getClientIds().isBlank()) {
+            return false;
+        }
+        List<String> retained = Arrays.stream(config.getClientIds().split(","))
+                .map(String::trim)
+                .filter(token -> !token.isEmpty())
+                .filter(token -> {
+                    try {
+                        return Integer.parseInt(token) != clientId;
+                    } catch (NumberFormatException ignore) {
+                        return true;
+                    }
+                })
+                .distinct()
+                .toList();
+        String next = String.join(",", retained);
+        if (Objects.equals(next, config.getClientIds())) {
+            return false;
+        }
+        statusPageConfigMapper.update(null, Wrappers.<StatusPageConfig>update()
+                .eq("id", config.getId())
+                .set("client_ids", next));
+        return true;
+    }
+
+    /**
+     * Remove the deleted client ID from sub-account permission lists.
+     *
+     * @param clientId client ID
+     * @return number of updated accounts
+     */
+    private int removeClientFromAccountPermissions(int clientId) {
+        List<Account> accounts = accountMapper.selectList(Wrappers.<Account>lambdaQuery()
+                .isNotNull(Account::getClients));
+        int changed = 0;
+        for (Account account : accounts) {
+            List<Integer> current = parseAccountClientIds(account);
+            if (!current.contains(clientId)) {
+                continue;
+            }
+            List<Integer> retained = current.stream()
+                    .filter(Objects::nonNull)
+                    .filter(id -> id != clientId)
+                    .distinct()
+                    .toList();
+            accountMapper.update(null, Wrappers.<Account>update()
+                    .eq("id", account.getId())
+                    .set("clients", JSONArray.copyOf(retained).toString()));
+            changed++;
+        }
+        return changed;
+    }
+
+    /**
+     * Parse account client-permission JSON while tolerating corrupt legacy values.
+     *
+     * @param account account row
+     * @return client ID list
+     */
+    private List<Integer> parseAccountClientIds(Account account) {
+        if (account == null || account.getClients() == null || account.getClients().isBlank()) {
+            return List.of();
+        }
+        try {
+            return JSONArray.parseArray(account.getClients()).toList(Integer.class);
+        } catch (Exception e) {
+            log.warn("账号客户端权限解析失败 accountId={} reason={}", account.getId(), e.getMessage());
+            return List.of();
+        }
     }
 
     private int randomClientId() {

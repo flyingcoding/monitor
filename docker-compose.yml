@@ -105,6 +105,7 @@ services:
       INFLUX_ORG: ${INFLUX_ORG}
       MONITOR_TSDB_PROVIDER: ${MONITOR_TSDB_PROVIDER:-influxdb}
       VM_URL: ${VM_URL:-http://victoria-metrics:8428}
+      CORS_ORIGIN: ${CORS_ORIGIN:-}
       JWT_KEY: ${JWT_KEY}
       SSH_ENCRYPT_KEY: ${SSH_ENCRYPT_KEY}
       MAIL_USERNAME: ${MAIL_USERNAME}

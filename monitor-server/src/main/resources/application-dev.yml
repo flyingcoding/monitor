@@ -8,27 +8,27 @@ springdoc:
 spring:
   influx:
     # ⚠ Deprecated（v2.0-beta）：迁移到 monitor.tsdb.influxdb.*；新增配置请使用新 namespace，本节占位保留至 v2.1.x
-    url: ${INFLUX_URL:http://192.168.5.100:8086}
-    user: ${INFLUX_USER:flying}
-    password: ${INFLUX_PASSWORD:influxdb_MWR5TP}
+    url: ${INFLUX_URL:http://localhost:8086}
+    user: ${INFLUX_USER:admin}
+    password: ${INFLUX_PASSWORD:}
     bucket: ${INFLUX_BUCKET:program}
     organization: ${INFLUX_ORG:flyingcoding}
   mail:
     host: ${MAIL_HOST:smtp.163.com}
-    username: ${MAIL_USERNAME:javaweb111@163.com}
-    password: ${MAIL_PASSWORD:UMUNGOCGACNHANOL}
+    username: ${MAIL_USERNAME:}
+    password: ${MAIL_PASSWORD:}
     port: ${MAIL_PORT:465}
     properties:
-      from: ${MAIL_FROM:javaweb111@163.com}
+      from: ${MAIL_FROM:}
       mail:
         smtp:
           socketFactory:
             class: javax.net.ssl.SSLSocketFactory
   rabbitmq:
     port: ${RABBITMQ_PORT:5672}
-    addresses: ${RABBITMQ_HOST:192.168.5.100}
+    addresses: ${RABBITMQ_HOST:localhost}
     username: ${RABBITMQ_USER:rabbitmq}
-    password: ${RABBITMQ_PASSWORD:rabbitmq}
+    password: ${RABBITMQ_PASSWORD:}
     virtual-host: /
     listener:
       simple:
@@ -39,9 +39,9 @@ spring:
           multiplier: 2
         default-requeue-rejected: false
   datasource:
-    url: ${MYSQL_URL:jdbc:mysql://192.168.5.100:3306/monitor}
+    url: ${MYSQL_URL:jdbc:mysql://localhost:3306/monitor}
     username: ${MYSQL_USER:monitor}
-    password: ${MYSQL_PASSWORD:SwCe6mbRBwks6G6d}
+    password: ${MYSQL_PASSWORD:}
     driver-class-name: com.mysql.cj.jdbc.Driver
     hikari:
       minimum-idle: 5
@@ -51,10 +51,10 @@ spring:
   data:
     redis:
       database: 0
-      host: ${REDIS_HOST:192.168.5.100}
+      host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
       username: ${REDIS_USERNAME:default}
-      password: ${REDIS_PASSWORD:redis_EHb2Yc}
+      password: ${REDIS_PASSWORD:}
   flyway:
     enabled: true
     locations: classpath:db/migration
@@ -77,7 +77,7 @@ spring:
       limit: 100
       block: 30
     cors:
-      origin: '*'
+      origin: ${CORS_ORIGIN:}
       credentials: false
       methods: '*'
 security:
@@ -112,9 +112,9 @@ monitor:
   tsdb:
     provider: ${MONITOR_TSDB_PROVIDER:influxdb}
     influxdb:
-      url: ${INFLUX_URL:http://192.168.5.100:8086}
-      user: ${INFLUX_USER:flying}
-      password: ${INFLUX_PASSWORD:influxdb_MWR5TP}
+      url: ${INFLUX_URL:http://localhost:8086}
+      user: ${INFLUX_USER:admin}
+      password: ${INFLUX_PASSWORD:}
       bucket: ${INFLUX_BUCKET:program}
       organization: ${INFLUX_ORG:flyingcoding}
     victoria-metrics:

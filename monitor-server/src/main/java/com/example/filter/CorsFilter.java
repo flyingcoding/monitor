@@ -20,7 +20,8 @@ import java.util.Set;
  *
  * <p>v1.2 PRD R30/AC12 增强：{@code spring.web.cors.origin} 支持
  * <ul>
- *   <li>{@code *} —— 通配符，回显请求 Origin（dev 默认）；</li>
+ *   <li>{@code *} —— 通配符，回显请求 Origin（dev 可显式启用）；</li>
+ *   <li>空配置 —— 不写 {@code Access-Control-Allow-Origin}，等同于未启用跨域白名单；</li>
  *   <li>逗号分隔的精确 origin 列表，如 {@code https://a.com,https://b.com} —— 仅命中白名单时回显，否则不返回 ACAO 头。</li>
  * </ul>
  */
@@ -43,13 +44,18 @@ public class CorsFilter extends HttpFilter {
     private Set<String> originWhitelist = Set.of();
 
     /**
-     * 是否为通配符模式（{@code *} 或空配置）。
+     * 是否为通配符模式（仅 {@code *} 配置）。
      */
     private boolean wildcardOrigin = false;
 
     @PostConstruct
     void parseOriginConfig() {
-        if (origin == null || origin.isBlank() || "*".equals(origin.trim())) {
+        if (origin == null || origin.isBlank()) {
+            wildcardOrigin = false;
+            originWhitelist = Set.of();
+            return;
+        }
+        if ("*".equals(origin.trim())) {
             wildcardOrigin = true;
             originWhitelist = Set.of();
             return;

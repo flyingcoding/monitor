@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
-  buildSftpSocketUrl,
   downloadBase64File,
   joinRemotePath,
   parentRemotePath,
@@ -12,12 +11,6 @@ describe('sftp helpers', () => {
   afterEach(() => {
     vi.restoreAllMocks()
     vi.unstubAllGlobals()
-  })
-
-  it('builds authenticated SFTP WebSocket URL', () => {
-    expect(buildSftpSocketUrl('ws://localhost:8080/', 42, 'a b', 'session-1')).toBe(
-      'ws://localhost:8080/sftp/42?token=a%20b&sessionId=session-1'
-    )
   })
 
   it('joins remote paths without duplicate slashes', () => {

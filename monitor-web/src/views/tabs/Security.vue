@@ -102,7 +102,6 @@ const accounts = ref([])
 const initSubAccounts = () =>
   get('/api/user/sub/list', (list) => {
     accounts.value = list
-    console.log(accounts.value)
   })
 
 const createAccount = ref(false)
