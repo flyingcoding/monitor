@@ -21,6 +21,7 @@ import com.example.mapper.ClientSshMapper;
 import com.example.mapper.StatusPageConfigMapper;
 import com.example.mapper.struct.ClientStructMapper;
 import com.example.service.AlertEvaluator;
+import com.example.service.ClientReadModelService;
 import com.example.service.ClientService;
 import com.example.config.SseEventBus;
 import com.example.service.StatusPageService;
@@ -83,6 +84,8 @@ public class ClientServiceImpl extends ServiceImpl<ClientMapper, Client> impleme
     private AccountMapper accountMapper;
     @Resource
     private ClientStructMapper clientStructMapper;
+    @Resource
+    private ClientReadModelService clientReadModelService;
     @Resource
     private CryptoUtils cryptoUtils;
 
@@ -231,19 +234,15 @@ public class ClientServiceImpl extends ServiceImpl<ClientMapper, Client> impleme
      */
     @Override
     public List<ClientPreviewVO> listClients() {
-        return clientIdCache.asMap().values().stream().map(client -> {
-            ClientPreviewVO vo = clientStructMapper.toPreviewVO(client);
-            ClientDetail detail = clientDetailMapper.selectById(client.getId());
-            if (detail != null) {
-                BeanUtils.copyProperties(detail, vo);
-            }
-            RuntimeDetailVO runtime = currentRuntime.getIfPresent(client.getId());
+        List<Client> clients = new ArrayList<>(clientIdCache.asMap().values());
+        Map<Integer, RuntimeDetailVO> runtimeByClientId = new HashMap<>(currentRuntime.asMap());
+        Set<Integer> onlineClientIds = new HashSet<>();
+        for (Client client : clients) {
             if (this.isOnline(client.getId())) {
-                if (runtime != null) BeanUtils.copyProperties(runtime, vo);
-                vo.setOnline(true);
+                onlineClientIds.add(client.getId());
             }
-            return vo;
-        }).toList();
+        }
+        return clientReadModelService.listClients(clients, runtimeByClientId, onlineClientIds);
     }
 
     /**
@@ -253,14 +252,8 @@ public class ClientServiceImpl extends ServiceImpl<ClientMapper, Client> impleme
      */
     @Override
     public List<ClientSimpleVO> listSimpleClients() {
-        return clientIdCache.asMap().values().stream().map(client -> {
-            ClientSimpleVO vo = clientStructMapper.toSimpleVO(client);
-            ClientDetail detail = clientDetailMapper.selectById(vo.getId());
-            if (detail != null) {
-                BeanUtils.copyProperties(detail, vo);
-            }
-            return vo;
-        }).toList();
+        List<Client> clients = new ArrayList<>(clientIdCache.asMap().values());
+        return clientReadModelService.listSimpleClients(clients);
     }
 
     @Override

@@ -6,6 +6,8 @@
 > 审查口径：基于静态代码、配置、文档与 CI/部署文件审查；未实际执行 `mvn verify`、`pnpm run build`、`docker compose up` 或压测，因此本文不把结论表述为运行验证结果。
 >
 > 2026-07-10 更新：P0-1（删除 GET）、P0-3（SSH 密码回显）、P0-4（生产 stdout SQL）和 P0-5（生产密钥 fail-fast）已落实到代码、配置和单元测试。P0-2 的短期 channel ticket 仍是后续工作。
+>
+> 2026-07-11 更新：已抽取 `ClientReadModelService`，`listClients()` / `listSimpleClients()` 改为单次 `client_detail` 批量查询并补充单元测试；Redis list/detail cache 与可观测指标仍属于后续工作。
 
 ---
 
@@ -33,7 +35,7 @@
 当前最高优先级风险不是功能缺失，而是：
 
 1. **单机状态过重**：心跳、当前运行时、注册 token、SSE 连接、告警窗口等大量状态在 JVM 内存中，限制水平扩展。
-2. **读模型与列表查询性能**：`ClientServiceImpl.listClients()` 对每台主机查一次 `client_detail`，属于典型 N+1 查询。
+2. **读模型缓存与可观测性**：列表 N+1 已于 2026-07-11 消除，但 Redis list/detail cache、缓存失效覆盖和命中/回源指标仍未落地。
 3. **通道凭据与横向扩展**：SSE/WS token 仍放在 query 中；短期 channel ticket 尚未实现。删除 REST 语义、SSH 密码回显和生产 SQL/密钥配置问题已于 2026-07-10 修复。
 4. **部署生产化不足**：compose 默认暴露 MySQL/Redis/RabbitMQ/InfluxDB 等基础设施端口，更适合开发环境而非生产环境。
 5. **数据模型后续扩展压力**：`account.clients`、`status_page_config.client_ids`、`alert_rule.channel_ids` 使用 JSON/text 字段，MVP 简单，但多租户、细粒度权限、索引审计会越来越困难。
@@ -321,13 +323,13 @@ mybatis-plus:
 | `ClientDeletionService` | 删除合同、关联清理、缓存失效 |
 | `ClientSshService` | SSH/SFTP 配置、加密、权限与审计 |
 
-第一阶段只抽 `ClientReadModelService` 与 `ClientDeletionService`，收益最大、风险最小。
+第一阶段优先抽 `ClientReadModelService` 与 `ClientDeletionService`，收益最大、风险最小。其中 `ClientReadModelService` 已于 2026-07-11 完成，`ClientDeletionService` 仍待后续任务。
 
 ---
 
-### P1-2. 主机列表存在 N+1 查询
+### P1-2. 主机列表 N+1 查询（已于 2026-07-11 修复）
 
-`listClients()` 从本地 client cache 遍历主机，然后每台主机查询一次 `client_detail`。`listSimpleClients()` 也有类似模式。
+修复前，`listClients()` 从本地 client cache 遍历主机，然后每台主机查询一次 `client_detail`；`listSimpleClients()` 也有相同模式。
 
 问题：
 
@@ -335,14 +337,20 @@ mybatis-plus:
 - SSE `publishClientList()` 也会触发列表构造，会放大问题。
 - 状态页、权限过滤、列表刷新都可能重复触发该路径。
 
-建议 v2.1 处理：
+已完成：
 
-1. 用 `selectBatchIds(clientIds)` 一次取所有 `client_detail`。
-2. 建 Redis read model：
+1. 抽取 `ClientReadModelService`，保留 `ClientServiceImpl` 的 Caffeine、心跳与在线状态事实源。
+2. 用 MyBatis-Plus 3.5.16 的 `selectByIds(clientIds)` 一次取所有 `client_detail`；不再使用已废弃的 `selectBatchIds`。
+3. 批量结果按 `ClientDetail.id` 建索引，再按客户端缓存快照顺序组装 VO，避免依赖数据库返回顺序。
+4. 单元测试覆盖单次批量查询、禁止逐 ID 查询、详情缺失、输入顺序和在线/离线 runtime 叠加语义。
+
+后续 v2.1 工作：
+
+1. 建 Redis read model：
    - `client:list:{permissionHash}`
    - `client:detail:{clientId}`
    - `status:candidates`
-3. 明确失效点：
+2. 明确失效点：
    - 主机注册。
    - 主机删除。
    - 主机重命名。
@@ -350,6 +358,7 @@ mybatis-plus:
    - `client_detail` 更新。
    - 状态页配置更新。
    - 子账户权限变更。
+3. 为列表接口增加缓存命中率、回源耗时和失效次数指标。
 4. 保留 Caffeine 作为极短 TTL 进程内缓存，但不要让它成为跨实例事实源。
 
 ---
@@ -440,11 +449,12 @@ CREATE TABLE registration_token (
 
 2. **Redis 读模型**
    - 完成 `client list/details cache`。
-   - 消除 `listClients()` / `listSimpleClients()` N+1。
+   - `listClients()` / `listSimpleClients()` N+1 已于 2026-07-11 消除。
    - 为列表接口增加缓存命中率、回源耗时、失效次数指标。
 
 3. **ClientServiceImpl 拆分**
-   - 第一阶段只抽 `ClientReadModelService` 和 `ClientDeletionService`。
+   - `ClientReadModelService` 已于 2026-07-11 抽取。
+   - 后续继续抽 `ClientDeletionService`。
    - 不改外部 API，先降低单类复杂度。
 
 4. **TSDB 缓冲增强**
@@ -583,8 +593,9 @@ CREATE TABLE registration_token (
 | 已完成 | SSH 密码不回显 | 凭据安全风险高 |
 | 已完成 | prod 关闭 SQL stdout 日志 | 避免生产日志泄露与噪声 |
 | 已完成 | prod 密钥 fail-fast | 防止误用示例密钥或空密钥 |
-| P1 | Redis read model + 消除 N+1 | 直接改善列表页、状态页、权限过滤性能 |
-| P1 | 拆 `ClientServiceImpl` | 降低后续改动风险 |
+| 已完成 | 抽 `ClientReadModelService` + 消除列表 N+1 | 单次批量加载详情，降低列表与 SSE 刷新查询量 |
+| P1 | Redis read model + 缓存指标 | 继续改善列表页、状态页、权限过滤性能并支持跨实例事实源 |
+| P1 | 继续拆 `ClientDeletionService` | 降低后续改动风险 |
 | P1 | 注册 token 持久化 | 为 HA-lite 铺路 |
 | P2 | Redis Pub/Sub SSE | 支持多实例部署 |
 | P2 | 告警/探测分布式防重复 | 避免 HA 后重复通知/重复探测 |
@@ -630,6 +641,8 @@ perf(client): add client read model service and remove list N+1 queries
 - `client_detail` 批量查询。
 - 预留 Redis 缓存接口。
 - `listClients()` 与 `listSimpleClients()` 性能测试或单测覆盖。
+
+状态：已于 2026-07-11 完成。默认实现使用 `selectByIds` 单次批量查询详情，按客户端 ID 索引后保持输入顺序组装 VO；在线状态、runtime 叠加、Controller/SSE/权限合同不变，Redis-backed 实现留给 10.4。
 
 ### 10.4 第四批 PR：Redis read model
 
