@@ -42,6 +42,7 @@ import java.util.concurrent.atomic.AtomicReference;
  *   <li>禁用账号 → 401 RestBean；</li>
  *   <li>readonly token + POST → 403 RestBean；</li>
  *   <li>readonly token + GET → 放行；</li>
+ *   <li>readonly token + 敏感 GET 注册 Token → 403 RestBean；</li>
  *   <li>X-Api-Token header 优先于 Authorization。</li>
  * </ul>
  *
@@ -255,6 +256,29 @@ class ApiTokenFilterTest {
 
         Assertions.assertTrue(chained.get());
         Assertions.assertNotNull(SecurityContextHolder.getContext().getAuthentication());
+    }
+
+    /**
+     * 注册 Token 虽为 GET，但会暴露主机注册能力，readonly token 不得访问。
+     */
+    @Test
+    void shouldReturn403ForReadOnlyTokenOnSensitiveGet() throws Exception {
+        ApiToken row = stubToken(15L, 12, "readonly", null);
+        Account acc = stubAccount(12, "u12", Const.ROLE_DEFAULT, Boolean.TRUE);
+        tokensByHash.put("mtk_ro_register00000000000000000000000", row);
+        accountsById.put(12, acc);
+
+        StubHttpRequest req = new StubHttpRequest("GET", "/api/monitor/register");
+        req.setHeader("Authorization", "Bearer mtk_ro_register00000000000000000000000");
+        StubHttpResponse resp = new StubHttpResponse();
+        AtomicBoolean chained = new AtomicBoolean(false);
+        FilterChain chain = (request, response) -> chained.set(true);
+
+        filter.doFilterInternal(req, resp, chain);
+
+        Assertions.assertFalse(chained.get());
+        Assertions.assertEquals(403, resp.status);
+        Assertions.assertTrue(resp.body().contains("只读"));
     }
 
     /**

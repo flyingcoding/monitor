@@ -14,7 +14,6 @@ import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
@@ -27,7 +26,6 @@ import org.springframework.web.client.RestClientException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.Date;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -201,7 +199,7 @@ public class VictoriaMetricsProvider implements TimeSeriesAdapter {
      * @param vo       运行时数据
      */
     private void doWriteRuntimeData(int clientId, RuntimeDetailVO vo) {
-        RuntimeData data = this.toRuntimeData(clientId, vo);
+        RuntimeData data = RuntimeDataMapper.fromRuntimeDetail(clientId, vo);
         if (data == null) {
             return;
         }
@@ -224,7 +222,7 @@ public class VictoriaMetricsProvider implements TimeSeriesAdapter {
             return;
         }
         List<RuntimeData> data = batch.stream()
-                .map(vo -> this.toRuntimeData(clientId, vo))
+                .map(vo -> RuntimeDataMapper.fromRuntimeDetail(clientId, vo))
                 .filter(java.util.Objects::nonNull)
                 .toList();
         if (data.isEmpty()) {
@@ -236,24 +234,6 @@ public class VictoriaMetricsProvider implements TimeSeriesAdapter {
                 VM_PLACEHOLDER_ORG,
                 WritePrecision.NS,
                 data);
-    }
-
-    /**
-     * 把 {@link RuntimeDetailVO} 转换为 {@link RuntimeData}。
-     *
-     * @param clientId 客户端 ID
-     * @param vo       运行时数据
-     * @return measurement DTO；输入为空时返回 null
-     */
-    private RuntimeData toRuntimeData(int clientId, RuntimeDetailVO vo) {
-        if (vo == null) {
-            return null;
-        }
-        RuntimeData data = new RuntimeData();
-        BeanUtils.copyProperties(vo, data);
-        data.setClientId(clientId);
-        data.setTimestamp(new Date(vo.getTimestamp()).toInstant());
-        return data;
     }
 
     @Override

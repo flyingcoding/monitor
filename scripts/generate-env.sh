@@ -8,8 +8,8 @@ generate_password() {
     openssl rand -base64 24 | tr -d '/+=' | cut -c1-24
 }
 
-# 生成 Base64 编码的 32 字节随机密钥（API Token HMAC-SHA256 用）。
-generate_hmac_key() {
+# 生成 Base64 编码的 32 字节随机密钥。
+generate_base64_key() {
     openssl rand -base64 32 | tr -d '\n'
 }
 
@@ -31,9 +31,9 @@ fill_placeholders() {
     replace_placeholder "your_redis_password" "$(generate_password)"
     replace_placeholder "your_rabbitmq_password" "$(generate_password)"
     replace_placeholder "your_influx_password" "$(generate_password)"
-    replace_placeholder "your_jwt_secret_key" "$(generate_password)"
-    # v1.2：API Token HMAC-SHA256 密钥独立于 JWT_KEY，使用 Base64 编码的 32 字节随机值。
-    replace_placeholder "your_api_token_hmac_key" "$(generate_hmac_key)"
+    replace_placeholder "your_jwt_secret_key" "$(generate_base64_key)"
+    replace_placeholder "your_api_token_hmac_key" "$(generate_base64_key)"
+    replace_placeholder "your_ssh_encrypt_key" "$(generate_base64_key)"
 }
 
 if [[ ! -f "${ENV_FILE}" ]]; then

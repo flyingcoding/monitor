@@ -13,8 +13,9 @@ jobs:
     # （docker daemon 已是 ubuntu-latest runner 自带），保留 JWT_KEY / SSH_ENCRYPT_KEY / MAIL_*
     # 是因为既有 *Test.java 单测 / Spring 占位符仍可能消费这些环境变量
     env:
-      JWT_KEY: test-jwt-key
-      SSH_ENCRYPT_KEY: MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
+      JWT_KEY: test-jwt-key-at-least-thirty-two-characters
+      API_TOKEN_HMAC_KEY: tBJS7KfhpjRse1LS/OIiq1W1DkHeQSNITWTs35LprkY=
+      SSH_ENCRYPT_KEY: jSankbDcaZ05rqFCNhK804pTxzMHte/GXJTzMsitAFU=
       MAIL_USERNAME: test@example.com
       MAIL_PASSWORD: test
     steps:
@@ -101,8 +102,9 @@ jobs:
           REDIS_PWD=$(openssl rand -base64 18 | tr -d '/+=' | cut -c1-24)
           RABBITMQ_PWD=$(openssl rand -base64 18 | tr -d '/+=' | cut -c1-24)
           INFLUX_PWD=$(openssl rand -base64 18 | tr -d '/+=' | cut -c1-24)
-          JWT_K=$(openssl rand -base64 18 | tr -d '/+=' | cut -c1-24)
+          JWT_K=$(openssl rand -base64 32 | tr -d '\n')
           API_TOKEN_K=$(openssl rand -base64 32 | tr -d '\n')
+          SSH_K=$(openssl rand -base64 32 | tr -d '\n')
           sed -i "s|your_root_password|${MYSQL_ROOT_PWD}|g" .env
           sed -i "s|your_mysql_password|${MYSQL_USER_PWD}|g" .env
           sed -i "s|your_redis_password|${REDIS_PWD}|g" .env
@@ -110,6 +112,7 @@ jobs:
           sed -i "s|your_influx_password|${INFLUX_PWD}|g" .env
           sed -i "s|your_jwt_secret_key|${JWT_K}|g" .env
           sed -i "s|your_api_token_hmac_key|${API_TOKEN_K}|g" .env
+          sed -i "s|your_ssh_encrypt_key|${SSH_K}|g" .env
           # 邮件占位（不真发邮件，e2e 不测告警通道）
           sed -i "s|your_email@example.com|e2e@example.com|g" .env
           sed -i "s|your_email_auth_code|e2e-dummy|g" .env

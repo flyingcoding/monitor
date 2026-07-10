@@ -18,7 +18,7 @@ public interface AccountService extends IService<Account>, UserDetailsService {
     String resetConfirm(ConfirmResetVO info);
     boolean changePassword(int id,String oldPass,String newPass);
     void createSubAccount(CreateSubAccountVO vo);
-    void deleteSubAccount(int uid);
+    boolean deleteSubAccount(int uid);
     List<SubAccountVO> listSubAccount();
     String modifyEmail(int uid, ModifyEmailVO vo);
 

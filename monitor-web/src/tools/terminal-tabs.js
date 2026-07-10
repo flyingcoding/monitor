@@ -29,7 +29,8 @@ function createTerminalTab(clientId, index, sessionIdFactory = createTerminalSes
       ip: '',
       port: 22,
       username: '',
-      password: ''
+      password: '',
+      passwordConfigured: false
     }
   }
 }

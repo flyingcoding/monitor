@@ -1,6 +1,6 @@
 <script setup>
 import { computed, defineAsyncComponent, onBeforeUnmount, reactive, ref, watch } from 'vue'
-import { get, post } from '@/net'
+import { del, get, post } from '@/net'
 import { withQuery } from '@/net/query'
 import { createReconnectingEventSource } from '@/net/sse'
 import {
@@ -130,7 +130,7 @@ function deleteClient() {
     type: 'warning'
   })
     .then(() => {
-      get(withQuery('/api/monitor/delete', { clientId: props.id }), () => {
+      del(`/api/monitor/${props.id}`, () => {
         emits('delete')
         props.update()
         ElMessage.success('主机已成功移除')

@@ -8,6 +8,7 @@ import com.example.config.security.oidc.OidcLoginException;
 import com.example.config.security.oidc.OidcProperties;
 import com.example.entity.dto.Account;
 import com.example.entity.dto.AccountOidcBinding;
+import com.example.entity.dto.ApiToken;
 import com.example.entity.vo.request.ConfirmResetVO;
 import com.example.entity.vo.request.CreateSubAccountVO;
 import com.example.entity.vo.request.EmailResetVO;
@@ -15,6 +16,7 @@ import com.example.entity.vo.request.ModifyEmailVO;
 import com.example.entity.vo.response.SubAccountVO;
 import com.example.mapper.AccountMapper;
 import com.example.mapper.AccountOidcBindingMapper;
+import com.example.mapper.ApiTokenMapper;
 import com.example.service.AccountService;
 import com.example.utils.Const;
 import com.example.utils.FlowUtils;
@@ -30,6 +32,7 @@ import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.security.core.userdetails.UsernameNotFoundException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Date;
 import java.util.List;
@@ -66,6 +69,9 @@ public class AccountServiceImpl extends ServiceImpl<AccountMapper, Account> impl
 
     @Resource
     AccountOidcBindingMapper accountOidcBindingMapper;
+
+    @Resource
+    ApiTokenMapper apiTokenMapper;
 
     @Resource
     PasswordPolicyValidator passwordPolicyValidator;
@@ -186,8 +192,17 @@ public class AccountServiceImpl extends ServiceImpl<AccountMapper, Account> impl
     }
 
     @Override
-    public void deleteSubAccount(int uid) {
-        this.removeById(uid);
+    @Transactional
+    public boolean deleteSubAccount(int uid) {
+        Account account = this.getById(uid);
+        if (account == null || !Const.ROLE_DEFAULT.equals(account.getRole())) {
+            return false;
+        }
+        apiTokenMapper.delete(Wrappers.<ApiToken>lambdaQuery()
+                .eq(ApiToken::getAccountId, uid));
+        accountOidcBindingMapper.delete(Wrappers.<AccountOidcBinding>lambdaQuery()
+                .eq(AccountOidcBinding::getAccountId, uid));
+        return this.removeById(uid);
     }
 
     @Override

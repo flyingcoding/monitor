@@ -4,6 +4,8 @@
 > 仓库：`flyingcoding/monitor`  
 > 分支/版本依据：当前 `main-v2` 仓库内容、项目文档、配置文件、核心代码与 CI/部署文件。  
 > 审查口径：基于静态代码、配置、文档与 CI/部署文件审查；未实际执行 `mvn verify`、`pnpm run build`、`docker compose up` 或压测，因此本文不把结论表述为运行验证结果。
+>
+> 2026-07-10 更新：P0-1（删除 GET）、P0-3（SSH 密码回显）、P0-4（生产 stdout SQL）和 P0-5（生产密钥 fail-fast）已落实到代码、配置和单元测试。P0-2 的短期 channel ticket 仍是后续工作。
 
 ---
 
@@ -32,7 +34,7 @@
 
 1. **单机状态过重**：心跳、当前运行时、注册 token、SSE 连接、告警窗口等大量状态在 JVM 内存中，限制水平扩展。
 2. **读模型与列表查询性能**：`ClientServiceImpl.listClients()` 对每台主机查一次 `client_detail`，属于典型 N+1 查询。
-3. **安全与 REST 语义细节**：`GET /api/monitor/delete` 是变更操作；SSE/WS token 放 query；SSH 密码可解密回显；prod 中 MyBatis stdout SQL 日志仍开启。
+3. **通道凭据与横向扩展**：SSE/WS token 仍放在 query 中；短期 channel ticket 尚未实现。删除 REST 语义、SSH 密码回显和生产 SQL/密钥配置问题已于 2026-07-10 修复。
 4. **部署生产化不足**：compose 默认暴露 MySQL/Redis/RabbitMQ/InfluxDB 等基础设施端口，更适合开发环境而非生产环境。
 5. **数据模型后续扩展压力**：`account.clients`、`status_page_config.client_ids`、`alert_rule.channel_ids` 使用 JSON/text 字段，MVP 简单，但多租户、细粒度权限、索引审计会越来越困难。
 
@@ -163,9 +165,9 @@ E2E：Playwright 黄金路径，CI 跑 docker-compose 全栈
 
 ## 5. 高优先级问题
 
-### P0-1. 变更操作使用 GET
+### P0-1. 变更操作使用 GET（已于 2026-07-10 修复）
 
-当前删除主机接口是：
+修复前删除主机接口是：
 
 ```java
 @GetMapping("/delete")
@@ -178,19 +180,14 @@ public RestBean<Void> deleteClient(@RequestParam int clientId, ...)
 - GET 可能被浏览器预取、缓存、代理、安全扫描误触发。
 - 对外 API 语义不规范，后续开放 API Token 或 SDK 时会扩大风险。
 
-建议改为：
+现已改为：
 
 ```http
-DELETE /api/v1/monitor/clients/{clientId}
+DELETE /api/monitor/{clientId}
+DELETE /api/v1/monitor/{clientId}
 ```
 
-短期兼容方案：
-
-1. 新增标准 DELETE 接口。
-2. 老 `GET /delete` 保留一个版本，返回 warning header 或日志提示 deprecated。
-3. 前端立即切到 DELETE。
-4. E2E 增加删除链路测试。
-5. 下个小版本移除或默认禁用旧接口。
+实现说明：前端已切到 `DELETE`，旧 `GET /delete` 未保留，避免兼容入口继续暴露可被预取的破坏性操作。回归测试覆盖控制器映射合同。
 
 ---
 
@@ -225,9 +222,9 @@ JWT → 请求一次短期 channel ticket → SSE/WS 使用 ticket → ticket �
 
 ---
 
-### P0-3. SSH 密码可解密回显给前端
+### P0-3. SSH 密码可解密回显给前端（已于 2026-07-10 修复）
 
-当前 `getSshSetting` 会将 `client_ssh.password` 解密后返回给前端。
+修复前 `getSshSetting` 会将 `client_ssh.password` 解密后返回给前端。
 
 问题：
 
@@ -235,9 +232,9 @@ JWT → 请求一次短期 channel ticket → SSE/WS 使用 ticket → ticket �
 - Web 终端功能天然敏感，凭据回显会扩大泄漏面。
 - 一旦浏览器、插件、XSS、前端日志、截图泄露，就直接泄露服务器凭据。
 
-建议：
+实施结果：
 
-- 查询 SSH 设置时只返回 `passwordConfigured=true`，不返回明文。
+- 查询 SSH 设置只返回 `passwordConfigured`，不返回明文。
 - 修改 SSH 设置时：
   - 密码字段为空：保持原密码不变。
   - 密码字段非空：替换密码。
@@ -246,9 +243,9 @@ JWT → 请求一次短期 channel ticket → SSE/WS 使用 ticket → ticket �
 
 ---
 
-### P0-4. prod SQL stdout 日志应关闭
+### P0-4. prod SQL stdout 日志应关闭（已于 2026-07-10 修复）
 
-`application-prod.yml` 中仍配置：
+修复前 `application-prod.yml` 中配置：
 
 ```yaml
 mybatis-plus:
@@ -262,19 +259,19 @@ mybatis-plus:
 - 参数、业务 ID、部分敏感上下文可能进入日志系统。
 - 性能上也有不必要开销。
 
-建议：
+实施结果：
 
-- 生产环境删除该项。
+- 已从生产环境删除该项。
 - 开发 profile 保留即可。
 - 生产调试 SQL 通过 logger level、短期动态开关、采样与脱敏完成。
 
 ---
 
-### P0-5. 生产密钥应 fail-fast
+### P0-5. 生产密钥应 fail-fast（已于 2026-07-10 修复）
 
-当前 `.env.example` 已说明 `JWT_KEY`、`API_TOKEN_HMAC_KEY`、`SSH_ENCRYPT_KEY` 必须使用不同强随机密钥，但 prod 中部分配置仍允许空值或示例值路径。
+修复前 `.env.example` 说明了 `JWT_KEY`、`API_TOKEN_HMAC_KEY`、`SSH_ENCRYPT_KEY` 必须使用不同强随机密钥，但 prod 中部分配置仍允许空值或示例值路径。
 
-建议启动时增加配置校验：
+现已在 prod 启动时增加配置校验：
 
 - `prod` 下 `JWT_KEY` 必填。
 - `prod` 下 `API_TOKEN_HMAC_KEY` 必填。
@@ -434,10 +431,10 @@ CREATE TABLE registration_token (
 必做任务：
 
 1. **安全修复**
-   - 删除接口改为 DELETE。
-   - SSH 密码不再明文回显。
-   - prod 关闭 MyBatis stdout SQL 日志。
-   - prod 密钥 fail-fast。
+   - 删除接口改为 DELETE。（已完成）
+   - SSH 密码不再明文回显。（已完成）
+   - prod 关闭 MyBatis stdout SQL 日志。（已完成）
+   - prod 密钥 fail-fast。（已完成）
    - `/actuator/**` 改成只公开 `/actuator/health`，未来非 health 端点必须认证。
    - SSE/WS 增加短期 channel ticket。
 
@@ -461,7 +458,7 @@ CREATE TABLE registration_token (
 - `mvn verify` 通过。
 - 前端 lint/test/build 通过。
 - Playwright E2E 通过。
-- 新增安全回归测试覆盖删除、SSH 密码、token ticket、prod 配置校验。
+- 新增安全回归测试覆盖删除、SSH 密码和 prod 配置校验；token ticket 在其实现任务中补充。
 
 ---
 
@@ -582,10 +579,10 @@ CREATE TABLE registration_token (
 
 | 优先级 | 任务 | 原因 |
 |---|---|---|
-| P0 | 删除接口 GET → DELETE | 安全与 HTTP 语义问题，影响最大，改动可控 |
-| P0 | SSH 密码不回显 | 凭据安全风险高 |
-| P0 | prod 关闭 SQL stdout 日志 | 避免生产日志泄露与噪声 |
-| P0 | prod 密钥 fail-fast | 防止误用示例密钥或空密钥 |
+| 已完成 | 删除接口 GET → DELETE | 安全与 HTTP 语义问题，影响最大，改动可控 |
+| 已完成 | SSH 密码不回显 | 凭据安全风险高 |
+| 已完成 | prod 关闭 SQL stdout 日志 | 避免生产日志泄露与噪声 |
+| 已完成 | prod 密钥 fail-fast | 防止误用示例密钥或空密钥 |
 | P1 | Redis read model + 消除 N+1 | 直接改善列表页、状态页、权限过滤性能 |
 | P1 | 拆 `ClientServiceImpl` | 降低后续改动风险 |
 | P1 | 注册 token 持久化 | 为 HA-lite 铺路 |
@@ -607,14 +604,7 @@ CREATE TABLE registration_token (
 chore(security): harden prod config and replace monitor delete GET with DELETE
 ```
 
-范围：
-
-- 新增 `DELETE /api/v1/monitor/clients/{clientId}`。
-- 前端删除操作切换到 DELETE。
-- 保留旧 GET 入口并标记 deprecated。
-- prod 删除 MyBatis stdout SQL。
-- 增加 prod 密钥校验。
-- 增加对应单测/E2E。
+状态：已于 2026-07-10 完成。实际接口为 `DELETE /api/monitor/{clientId}`（兼容 `/api/v1/monitor/{clientId}`）；前端已切换，旧 GET 入口已移除，生产 SQL 日志与密钥校验已同步处理。
 
 ### 10.2 第二批 PR：SSH 凭据安全
 
@@ -624,12 +614,7 @@ chore(security): harden prod config and replace monitor delete GET with DELETE
 fix(ssh): stop returning decrypted ssh passwords to frontend
 ```
 
-范围：
-
-- `SshSettingsVO` 改为 `passwordConfigured`。
-- 保存 SSH 设置支持空密码不覆盖。
-- 前端 SSH 表单调整。
-- 增加回归测试：查询 SSH 设置不含明文密码。
+状态：已于 2026-07-10 完成。`SshSettingsVO` 返回 `passwordConfigured`，空密码保持原密文，前端和服务层均有回归测试覆盖。
 
 ### 10.3 第三批 PR：ClientReadModelService
 

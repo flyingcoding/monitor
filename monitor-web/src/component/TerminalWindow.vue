@@ -23,8 +23,7 @@ const props = defineProps({
 
 const rules = {
   port: [{ required: true, message: '请输入端口', trigger: ['blur', 'change'] }],
-  username: [{ required: true, message: '请输入用户名', trigger: ['blur', 'change'] }],
-  password: [{ required: true, message: '请输入密码', trigger: ['blur', 'change'] }]
+  username: [{ required: true, message: '请输入用户名', trigger: ['blur', 'change'] }]
 }
 
 const tabs = ref([])
@@ -118,16 +117,20 @@ function saveConnection(tab) {
   const form = formRefs[tab.name]
   if (!form) return
   form.validate((isValid) => {
-    if (isValid) {
-      post(
-        '/api/monitor/ssh-save',
-        {
-          ...tab.connection,
-          id: tab.clientId
-        },
-        () => (tab.state = 2)
-      )
+    if (!isValid) return
+    if (!tab.connection.password && !tab.connection.passwordConfigured) {
+      ElMessage.warning('请先填写 SSH 密码')
+      return
     }
+    const { passwordConfigured: _passwordConfigured, ...connection } = tab.connection
+    post(
+      '/api/monitor/ssh-save',
+      {
+        ...connection,
+        id: tab.clientId
+      },
+      () => (tab.state = 2)
+    )
   })
 }
 
@@ -200,7 +203,11 @@ watch(
               <el-input placeholder="请输入用户名..." v-model="tab.connection.username" />
             </el-form-item>
             <el-form-item prop="password" label="登录密码">
-              <el-input placeholder="请输入密码..." type="password" v-model="tab.connection.password" />
+              <el-input
+                :placeholder="tab.connection.passwordConfigured ? '留空保持当前密码' : '请输入密码...'"
+                type="password"
+                v-model="tab.connection.password"
+              />
             </el-form-item>
             <el-button type="success" @click="saveConnection(tab)" plain>立即连接</el-button>
           </el-form>

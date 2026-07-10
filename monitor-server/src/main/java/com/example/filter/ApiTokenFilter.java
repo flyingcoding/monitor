@@ -34,7 +34,7 @@ import java.util.Set;
  * <ol>
  *   <li>调用 {@link ApiTokenService#validateAndResolve(String)} 解析；</li>
  *   <li>校验绑定的 {@link Account} 是否启用（{@code enabled != FALSE}）；</li>
- *   <li>校验 scope：{@code readonly} 只放行 GET/HEAD/OPTIONS，其它返回 403；</li>
+ *   <li>校验 scope：{@code readonly} 只放行安全的读取端点，敏感读取端点和所有写操作返回 403；</li>
  *   <li>写入 {@code SecurityContextHolder} 与请求属性，便于下游 controller 复用 JwtFilter 的语义；</li>
  *   <li>异步触发 {@link ApiTokenService#recordUsage(long, String)} 更新 last_used_*（60s 节流）。</li>
  * </ol>
@@ -50,6 +50,14 @@ public class ApiTokenFilter extends OncePerRequestFilter {
      * 只读 token 允许的 HTTP 方法。{@code TRACE} 不在内（无业务用途）。
      */
     private static final Set<String> READ_ONLY_METHODS = Set.of("GET", "HEAD", "OPTIONS");
+
+    /**
+     * 虽然使用 GET，但会返回或改变高权限能力边界的端点不属于 readonly token 的读取范围。
+     */
+    private static final Set<String> READ_ONLY_RESTRICTED_PATHS = Set.of(
+            "/api/monitor/register",
+            "/api/v1/monitor/register"
+    );
 
     @Resource
     private ApiTokenService apiTokenService;
@@ -96,8 +104,8 @@ public class ApiTokenFilter extends OncePerRequestFilter {
             return;
         }
 
-        // 5. scope 校验：readonly 仅允许只读方法
-        if ("readonly".equals(record.getScope()) && !READ_ONLY_METHODS.contains(request.getMethod())) {
+        // 5. scope 校验：readonly 只允许没有敏感副作用或能力泄露的读取请求
+        if ("readonly".equals(record.getScope()) && !isReadOnlyRequest(request)) {
             writeFailure(response, 403, "API Token 仅具备只读权限");
             return;
         }
@@ -132,6 +140,20 @@ public class ApiTokenFilter extends OncePerRequestFilter {
         }
 
         filterChain.doFilter(request, response);
+    }
+
+    /**
+     * 判断请求是否可由 readonly API Token 调用。
+     *
+     * <p>HTTP 方法只是第一层筛选：历史上存在以 GET 暴露注册 Token 的端点，
+     * 因此还需按路径排除会泄露高权限能力的读取接口。
+     *
+     * @param request 当前请求
+     * @return 允许 readonly token 调用时返回 true
+     */
+    private boolean isReadOnlyRequest(HttpServletRequest request) {
+        return READ_ONLY_METHODS.contains(request.getMethod())
+                && !READ_ONLY_RESTRICTED_PATHS.contains(request.getRequestURI());
     }
 
     /**

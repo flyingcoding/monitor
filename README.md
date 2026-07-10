@@ -16,7 +16,7 @@
 - 可选采集：进程、NVIDIA GPU、SMART、systemd 服务，能力通过 `client_detail.capabilities_json` 上报。
 - 实时通道：SSE 推送主机列表、runtime、告警和可选采集快照；WebSocket 提供 SSH shell 与 SFTP。
 - 告警体系：阈值规则、告警历史、确认/恢复、邮件/Webhook/钉钉/飞书通知。
-- 安全：JWT、管理员/子账户权限、API Token、OIDC/SSO、密码策略、请求日志脱敏、SSH/OIDC/探测敏感字段加密。
+- 安全：JWT、管理员/子账户权限、API Token、OIDC/SSO、密码策略、请求日志脱敏、SSH/OIDC/探测敏感字段加密；SSH 设置查询不回传密码。
 - 状态页：公开 `/status` 页面，默认关闭，管理员必须显式选择公开的客户端。
 - 时序后端：默认 InfluxDB 2.7，可切换 VictoriaMetrics，支持 JSONL 缓冲和重放。
 - 测试：后端 Surefire 单测、Failsafe + Testcontainers 集成测试、前端 Vitest、Playwright 三浏览器 E2E。
@@ -66,7 +66,7 @@ make clean
 
 - `CORS_ORIGIN=`：生产环境应填写精确 origin，例如 `https://monitor.example.com`。本地联调如需开放可显式设为 `*`。
 - `PASSWORD_POLICY=basic`：生产默认要求至少 8 位且包含字母和数字。本地调试如需放宽可设为 `none`。
-- `JWT_KEY`、`API_TOKEN_HMAC_KEY`、`SSH_ENCRYPT_KEY` 必须使用彼此不同的强随机密钥。
+- `JWT_KEY`、`API_TOKEN_HMAC_KEY`、`SSH_ENCRYPT_KEY` 必须使用彼此不同的强随机密钥。生产启动会拒绝空值、模板值、弱 JWT 和非 32 字节的 API/SSH 密钥。
 - `MAIL_USERNAME` / `MAIL_PASSWORD` 是通知与验证码邮件凭证，不应提交真实值。
 - `MONITOR_TSDB_PROVIDER=influxdb|victoria-metrics` 控制时序后端。
 
@@ -130,4 +130,4 @@ cd monitor-web && pnpm run e2e
 - `docs/v2.0-alpha-otlp.md`：OTLP 接收端点与 TSDB 适配层。
 - `docs/v2.0-beta-vm.md`：VictoriaMetrics 切换与 vmctl 迁移。
 - `docs/v2.0-tests.md`：集成测试与 E2E 测试体系。
-- `PROJECT_REVIEW_ISSUES.md`：2026-06-06 项目 review 问题清单。
+- `EVOLUTION.md` 的审查与演进章节：已处理问题和拆分后的后续任务。

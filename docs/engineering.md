@@ -14,10 +14,13 @@ This document contains repository-level engineering contracts that must be versi
 - REST controllers return `RestBean<T>` for normal API responses.
 - Client-visible `ResponseStatusException` paths must preserve the real HTTP status through `ValidationController`.
 - Multi-table write/delete workflows must use Spring transactions when partial writes would create orphaned records.
+- Destructive REST endpoints must use `DELETE`; do not retain a `GET` compatibility route for the same mutation.
+- `readonly` API Tokens allow only safe read operations. A route that exposes registration tokens or another privileged capability must be explicitly excluded even when it uses `GET`.
 - Runtime metric writes go through `TimeSeriesAdapter`; service code must not instantiate an InfluxDB or VictoriaMetrics client directly.
 - Schema changes require a Flyway migration plus matching DTO/VO/frontend updates where applicable.
 - Sensitive fields are encrypted at rest through `CryptoUtils`; never log JWTs, API tokens, email codes, SSH passwords, OIDC secrets, API token hashes, or raw authorization headers.
 - `client_ssh.password`, OIDC `client_secret_enc`, probe `headers_enc`, and probe `basic_auth_password_enc` are sensitive fields.
+- `GET /api/monitor/ssh` returns SSH host, port, username, and `passwordConfigured` only. It must never return or decrypt `client_ssh.password`; an empty password in an update retains an existing encrypted password.
 
 ## Client Deletion Contract
 
@@ -30,6 +33,13 @@ Deleting a client is a MySQL-side hard delete with retained TSDB history:
 - Invalidate server-local client, token, runtime, heartbeat, and status-page summary caches.
 - Publish a client-list SSE refresh.
 - Do not delete InfluxDB/VictoriaMetrics history in this workflow. TSDB history physical deletion requires a separate retention/cleanup task with an explicit rollback plan.
+
+## Account Deletion Contract
+
+- `POST /api/user/sub/create`, `GET /api/user/sub/list`, and `DELETE /api/user/sub/{uid}` require JWT-authenticated administrators; API Token-authenticated requests are rejected.
+- `DELETE /api/user/sub/{uid}` can delete only a default-role sub-account and rejects self-deletion.
+- The transaction deletes bound `api_token` and `account_oidc_binding` rows before deleting the `account` row.
+- `DELETE /api/monitor/{clientId}` is restricted to administrators and follows the client deletion contract above.
 
 ## Frontend Contracts
 
@@ -47,7 +57,7 @@ Deleting a client is a MySQL-side hard delete with retained TSDB history:
 - `CORS_ORIGIN=` means no permissive origin is configured by default. Local development may explicitly set `CORS_ORIGIN=*`.
 - `PASSWORD_POLICY=basic` is the default example policy. Local development may explicitly use `none`.
 - `application-dev.yml` may point to localhost Docker defaults, but must not include real private-network endpoints or real credentials.
-- Production profile values should be supplied by environment variables.
+- Production profile values should be supplied by environment variables. Startup rejects missing/template values, weak JWT keys, invalid API Token/SSH Base64 keys, and reused secrets.
 
 ## Performance Backlog
 

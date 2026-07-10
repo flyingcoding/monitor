@@ -107,6 +107,7 @@ services:
       VM_URL: ${VM_URL:-http://victoria-metrics:8428}
       CORS_ORIGIN: ${CORS_ORIGIN:-}
       JWT_KEY: ${JWT_KEY}
+      API_TOKEN_HMAC_KEY: ${API_TOKEN_HMAC_KEY}
       SSH_ENCRYPT_KEY: ${SSH_ENCRYPT_KEY}
       MAIL_USERNAME: ${MAIL_USERNAME}
       MAIL_PASSWORD: ${MAIL_PASSWORD}

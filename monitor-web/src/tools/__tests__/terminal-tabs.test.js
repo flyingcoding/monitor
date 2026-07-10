@@ -21,7 +21,8 @@ describe('terminal tab helpers', () => {
         ip: '',
         port: 22,
         username: '',
-        password: ''
+        password: '',
+        passwordConfigured: false
       }
     })
   })

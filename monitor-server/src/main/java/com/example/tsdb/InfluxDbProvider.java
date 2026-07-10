@@ -15,7 +15,6 @@ import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -32,7 +31,6 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.Date;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -324,7 +322,7 @@ public class InfluxDbProvider implements TimeSeriesAdapter {
      * @param vo       运行时数据
      */
     private void doWriteRuntimeData(int clientId, RuntimeDetailVO vo) {
-        RuntimeData data = this.toRuntimeData(clientId, vo);
+        RuntimeData data = RuntimeDataMapper.fromRuntimeDetail(clientId, vo);
         if (data == null) {
             return;
         }
@@ -342,31 +340,13 @@ public class InfluxDbProvider implements TimeSeriesAdapter {
             return;
         }
         List<RuntimeData> data = batch.stream()
-                .map(vo -> this.toRuntimeData(clientId, vo))
+                .map(vo -> RuntimeDataMapper.fromRuntimeDetail(clientId, vo))
                 .filter(java.util.Objects::nonNull)
                 .toList();
         if (data.isEmpty()) {
             return;
         }
         writeApi.writeMeasurements(bucket, organization, WritePrecision.NS, data);
-    }
-
-    /**
-     * 把运行时 VO 转换为 InfluxDB measurement DTO。
-     *
-     * @param clientId 客户端 ID
-     * @param vo       运行时数据
-     * @return InfluxDB measurement DTO；输入为空时返回 null
-     */
-    private RuntimeData toRuntimeData(int clientId, RuntimeDetailVO vo) {
-        if (vo == null) {
-            return null;
-        }
-        RuntimeData data = new RuntimeData();
-        BeanUtils.copyProperties(vo, data);
-        data.setClientId(clientId);
-        data.setTimestamp(new Date(vo.getTimestamp()).toInstant());
-        return data;
     }
 
     /**

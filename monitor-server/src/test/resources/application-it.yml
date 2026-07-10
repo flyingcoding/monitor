@@ -55,8 +55,8 @@ spring:
 
 security:
   ssh:
-    # 与 CI workflow 既有 SSH_ENCRYPT_KEY 一致，避免分歧密钥
-    encrypt-key: MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
+    # 集成测试专用的 Base64 32 字节密钥，不可用于任何部署环境。
+    encrypt-key: jSankbDcaZ05rqFCNhK804pTxzMHte/GXJTzMsitAFU=
 
 monitor:
   oidc:

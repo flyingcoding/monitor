@@ -13,9 +13,6 @@ springdoc:
     enabled: false
 knife4j:
   enable: false
-mybatis-plus:
-  configuration:
-    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
 spring:
   influx:
     # ⚠ Deprecated（v2.0-beta）：迁移到 monitor.tsdb.influxdb.*；启动时检测到旧 key 会打 WARN，v2.1.x 计划移除

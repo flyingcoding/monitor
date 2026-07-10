@@ -33,8 +33,10 @@ import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.BeanUtils;
 import org.springframework.context.annotation.Lazy;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.security.SecureRandom;
 import java.time.Instant;
@@ -348,23 +350,32 @@ public class ClientServiceImpl extends ServiceImpl<ClientMapper, Client> impleme
     /**
      * 保存客户端SSH连接配置，并在入库前对密码进行加密。
      *
+     * <p>已有配置时，空密码表示保持原有密文，避免为了回显密码而把明文发送给浏览器。
+     *
      * @param vo SSH连接参数
      */
     @Override
     public void saveSshConnection(SshConnectVO vo) {
         Client client = clientIdCache.getIfPresent(vo.getId());
         if (client == null) return;
+        ClientSsh existing = clientSshMapper.selectById(client.getId());
+        boolean hasNewPassword = vo.getPassword() != null && !vo.getPassword().isBlank();
+        if (existing == null && !hasNewPassword) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "首次保存 SSH 配置必须提供密码");
+        }
         ClientSsh clientSsh = new ClientSsh();
         BeanUtils.copyProperties(vo, clientSsh);
-        clientSsh.setPassword(cryptoUtils.encrypt(vo.getPassword()));
-        if (Objects.nonNull(clientSshMapper.selectById(client.getId())))
+        clientSsh.setPassword(hasNewPassword
+                ? cryptoUtils.encrypt(vo.getPassword())
+                : existing.getPassword());
+        if (existing != null)
             clientSshMapper.updateById(clientSsh);
         else
             clientSshMapper.insert(clientSsh);
     }
 
     /**
-     * 读取客户端SSH连接配置，并在返回前将密码解密为前端可回显内容。
+     * 读取客户端SSH连接配置，但永不向浏览器返回可用于登录的密码。
      *
      * @param clientId 客户端ID
      * @return SSH配置
@@ -381,7 +392,7 @@ public class ClientServiceImpl extends ServiceImpl<ClientMapper, Client> impleme
             }
         } else {
             vo = clientStructMapper.toSshSettingsVO(clientSsh);
-            vo.setPassword(cryptoUtils.decrypt(clientSsh.getPassword()));
+            vo.setPasswordConfigured(clientSsh.getPassword() != null && !clientSsh.getPassword().isBlank());
         }
         return vo;
     }

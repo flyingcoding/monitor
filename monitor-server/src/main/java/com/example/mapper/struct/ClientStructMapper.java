@@ -7,6 +7,7 @@ import com.example.entity.vo.response.ClientPreviewVO;
 import com.example.entity.vo.response.ClientSimpleVO;
 import com.example.entity.vo.response.SshSettingsVO;
 import org.mapstruct.Mapper;
+import org.mapstruct.Mapping;
 
 /**
  * 客户端相关 DTO -> VO 的编译期映射器。
@@ -44,5 +45,6 @@ public interface ClientStructMapper {
      * @param ssh SSH实体
      * @return SSH设置VO
      */
+    @Mapping(target = "passwordConfigured", ignore = true)
     SshSettingsVO toSshSettingsVO(ClientSsh ssh);
 }

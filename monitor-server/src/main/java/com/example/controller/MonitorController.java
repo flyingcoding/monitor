@@ -25,7 +25,9 @@ import jakarta.annotation.Resource;
 import jakarta.validation.Valid;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestAttribute;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -228,8 +230,8 @@ public class MonitorController {
      * @param userRole 当前用户角色
      * @return 操作结果
      */
-    @GetMapping("/delete")
-    public RestBean<Void> deleteClient(@RequestParam int clientId,
+    @DeleteMapping("/{clientId}")
+    public RestBean<Void> deleteClient(@PathVariable int clientId,
                                        @RequestAttribute(Const.ATTR_USER_ROLE) String userRole) {
         if (permissionService.isAdmin(userRole)) {
             clientService.deleteClient(clientId);

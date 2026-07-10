@@ -1,8 +1,7 @@
 <script setup>
 import { onBeforeUnmount, reactive, ref } from 'vue'
 import { Delete, Lock, Plus, Refresh, Switch } from '@element-plus/icons-vue'
-import { get, logout, post } from '@/net'
-import { withQuery } from '@/net/query'
+import { del, get, logout, post } from '@/net'
 import { ElMessage } from 'element-plus'
 import router from '@/router'
 import CreateSubAccount from '@/component/CreateSubAccount.vue'
@@ -115,7 +114,7 @@ function handleCreateAccount() {
 }
 
 function deleteAccount(id) {
-  get(withQuery('/api/user/sub/delete', { uid: id }), () => {
+  del(`/api/user/sub/${id}`, () => {
     ElMessage.success('子账户删除成功')
     initSubAccounts()
   })

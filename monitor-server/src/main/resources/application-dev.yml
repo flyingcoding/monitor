@@ -61,7 +61,7 @@ spring:
     baseline-on-migrate: true
   security:
     jwt:
-      key: ${JWT_KEY:monitor-key}
+      key: ${JWT_KEY:}
       expire: 72
       limit:
         base: 10
@@ -82,7 +82,7 @@ spring:
       methods: '*'
 security:
   ssh:
-    encrypt-key: ${SSH_ENCRYPT_KEY:MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=}
+    encrypt-key: ${SSH_ENCRYPT_KEY:}
 monitor:
   # v1.2 OIDC/SSO 配置（D3 默认策略）
   oidc:
@@ -96,7 +96,7 @@ monitor:
     hmac-key: ${API_TOKEN_HMAC_KEY:}
   # v1.2 共享层占位：密码复杂度策略（none|basic），Agent D 在 PasswordPolicyValidator 中消费
   password:
-    policy: ${PASSWORD_POLICY:none}
+    policy: ${PASSWORD_POLICY:basic}
   health-check:
     enabled: ${MONITOR_HEALTH_CHECK_ENABLED:true}
     interval: ${MONITOR_HEALTH_CHECK_INTERVAL:30000}

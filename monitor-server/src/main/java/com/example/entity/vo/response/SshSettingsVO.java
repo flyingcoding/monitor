@@ -13,5 +13,5 @@ public class SshSettingsVO {
     String ip;
     Integer port=22;
     String username;
-    String password;
+    boolean passwordConfigured;
 }
