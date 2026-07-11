@@ -151,7 +151,7 @@ function openTerminal(id) {
     <header class="page-heading">
       <div>
         <h1>管理主机列表</h1>
-        <p>管理服务器并快速查看 CPU、内存与网络状态</p>
+        <p>在这里你可以管理你的各个服务器，并快速查看 CPU、内存与网络状态</p>
       </div>
       <el-button
         class="add-host-button"
@@ -249,11 +249,7 @@ function openTerminal(id) {
     </div>
 
     <div v-else class="empty-panel">
-      <el-empty v-if="!list.length" description="当前无主机连接，请点击添加主机按钮">
-        <el-button v-if="store.isAdmin" type="primary" :icon="Plus" @click="register.show = true">
-          添加新主机
-        </el-button>
-      </el-empty>
+      <el-empty v-if="!list.length" description="当前无主机连接，请点击页面上方的添加主机按钮" />
       <el-empty v-else description="没有符合当前地区筛选的主机">
         <el-button type="primary" plain @click="clearFilters">清除筛选</el-button>
       </el-empty>
