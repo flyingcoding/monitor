@@ -232,11 +232,9 @@ onBeforeUnmount(() => {
           <el-divider style="margin: 10px 0" />
           <div v-if="accounts.length" style="text-align: center">
             <div v-for="item in accounts" :key="item.id" class="account-card">
-              <el-avatar
-                class="avatar"
-                :size="30"
-                src="https://cube.elemecdn.com/0/88/03b0d39583f48206768a7534e55bcpng.png"
-              />
+              <el-avatar class="avatar" :size="30">
+                {{ (item.username || 'U').charAt(0).toUpperCase() }}
+              </el-avatar>
               <div style="margin-left: 15px; line-height: 18px; flex: 1">
                 <div>
                   <span>{{ item.username }}</span>
@@ -274,35 +272,43 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .security-root {
-  width: 100%;
+  width: min(100%, 1280px);
+  margin: 0 auto;
 }
 
 .security-row {
   display: flex;
-  gap: 10px;
+  gap: 16px;
+}
+
+.security-row > div {
+  min-width: 0;
 }
 
 .info-card {
-  border-radius: 7px;
-  padding: 15px 20px;
-  background-color: var(--el-bg-color);
   height: fit-content;
+  padding: 22px;
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-md);
+  background: var(--app-surface);
+  box-shadow: var(--app-shadow-sm);
 
   .title {
     font-size: 18px;
-    font-weight: bold;
-    color: dodgerblue;
+    font-weight: 750;
+    color: var(--app-text);
   }
 }
 
 .account-card {
-  border-radius: 5px;
-  background-color: var(--el-bg-color-page);
-  padding: 10px;
+  padding: 12px;
   display: flex;
   align-items: center;
   text-align: left;
   margin: 10px 0;
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-sm);
+  background: var(--app-surface-soft);
 }
 
 :deep(.el-drawer) {
@@ -313,5 +319,22 @@ onBeforeUnmount(() => {
 
 :deep(.el-drawer__body) {
   padding: 0;
+}
+
+@media (max-width: 980px) {
+  .security-row {
+    flex-direction: column;
+  }
+}
+
+@media (max-width: 600px) {
+  .info-card {
+    padding: 18px 14px;
+  }
+
+  .account-card {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
 }
 </style>

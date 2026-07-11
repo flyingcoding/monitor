@@ -57,7 +57,7 @@ onMounted(() => {
   >
     <template #reference>
       <el-badge :value="unread" :hidden="unread === 0" :max="99" class="bell-badge">
-        <el-button :icon="Bell" circle text />
+        <el-button :icon="Bell" circle text aria-label="打开通知中心" />
       </el-badge>
     </template>
     <div class="bell-panel">

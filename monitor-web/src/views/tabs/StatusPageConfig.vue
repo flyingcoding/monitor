@@ -115,7 +115,7 @@ onMounted(() => {
       <el-divider style="margin: 10px 0" />
       <p style="font-size: 13px; color: grey; margin: 0 0 12px 0">
         公开状态页可在
-        <el-link type="primary" :underline="false" :href="previewHref" target="_blank">
+        <el-link type="primary" underline="never" :href="previewHref" target="_blank">
           {{ previewHref }}
         </el-link>
         访问；任何访客（包括未登录用户）均可查看勾选的客户端在线状态与最近 24 小时可用率。响应严格不暴露
@@ -208,16 +208,18 @@ onMounted(() => {
 }
 
 .info-card {
-  border-radius: 7px;
-  padding: 15px 20px;
-  background-color: var(--el-bg-color);
   width: 100%;
-  max-width: 880px;
+  max-width: 960px;
+  padding: 24px;
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-md);
+  background: var(--app-surface);
+  box-shadow: var(--app-shadow-sm);
 
   .title {
     font-size: 18px;
-    font-weight: bold;
-    color: dodgerblue;
+    font-weight: 750;
+    color: var(--app-text);
   }
 }
 
@@ -225,5 +227,19 @@ onMounted(() => {
   display: flex;
   gap: 10px;
   align-items: center;
+}
+
+@media (max-width: 600px) {
+  .info-card {
+    padding: 18px 14px;
+  }
+
+  .action-bar {
+    flex-wrap: wrap;
+  }
+
+  .action-bar .el-button {
+    flex: 1;
+  }
 }
 </style>

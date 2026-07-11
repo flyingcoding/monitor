@@ -46,16 +46,24 @@ const activeTab = computed({
 
 <style scoped>
 .alert-main {
-  margin: 0 50px;
+  width: min(100%, 1380px);
+  margin: 0 auto;
+
   .title {
-    font-size: 22px;
-    font-weight: bold;
+    color: var(--app-text);
+    font-size: clamp(24px, 2.2vw, 30px);
+    font-weight: 760;
+    letter-spacing: -0.03em;
   }
+
   .desc {
-    font-size: 15px;
-    color: grey;
+    margin-top: 7px;
+    color: var(--app-text-secondary);
+    font-size: 14px;
+    line-height: 1.6;
   }
 }
+
 .alert-tabs :deep(.el-tabs__nav-wrap)::after {
   display: none;
 }

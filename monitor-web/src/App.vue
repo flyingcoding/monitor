@@ -1,22 +1,9 @@
 <script setup>
 import { onErrorCaptured, ref } from 'vue'
-import { useDark, useToggle } from '@vueuse/core'
+import { useDark } from '@vueuse/core'
 
-/**
- * 初始化主题切换能力，保持现有明暗主题行为。
- */
-const isDark = useDark({
-  selector: 'html',
-  attribute: 'class',
-  valueDark: 'dark',
-  valueLight: 'light'
-})
-const toggleDark = useToggle(isDark)
-useDark({
-  onChanged(dark) {
-    toggleDark(dark)
-  }
-})
+// 在应用根同步持久化主题，确保公开状态页等无主题控件路由也能恢复明暗模式。
+useDark()
 
 const hasError = ref(false)
 const errorMessage = ref('')
@@ -40,23 +27,21 @@ function resetErrorState() {
 </script>
 
 <template>
-  <div v-if="hasError" class="error-boundary">
-    <el-result icon="error" title="页面发生错误" :sub-title="errorMessage">
-      <template #extra>
-        <el-button type="primary" @click="resetErrorState">重试</el-button>
-      </template>
-    </el-result>
-  </div>
-  <header v-else>
-    <div class="wrapper">
-      <router-view />
+  <div class="app-root">
+    <div v-if="hasError" class="error-boundary">
+      <el-result icon="error" title="页面发生错误" :sub-title="errorMessage">
+        <template #extra>
+          <el-button type="primary" @click="resetErrorState">重试</el-button>
+        </template>
+      </el-result>
     </div>
-  </header>
+    <router-view v-else />
+  </div>
 </template>
 
 <style scoped>
-header {
-  line-height: 1.5;
+.app-root {
+  min-height: 100vh;
 }
 
 .error-boundary {
@@ -64,5 +49,6 @@ header {
   display: flex;
   align-items: center;
   justify-content: center;
+  background: var(--app-canvas);
 }
 </style>

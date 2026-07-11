@@ -664,18 +664,27 @@ onMounted(() => {
 
 <style scoped>
 .probes-main {
-  margin: 0 50px;
+  width: min(100%, 1380px);
+  margin: 0 auto;
+
   .title {
-    font-size: 22px;
-    font-weight: bold;
+    color: var(--app-text);
+    font-size: clamp(24px, 2.2vw, 30px);
+    font-weight: 760;
+    letter-spacing: -0.03em;
   }
+
   .desc {
-    font-size: 15px;
-    color: grey;
+    margin-top: 7px;
+    color: var(--app-text-secondary);
+    font-size: 14px;
+    line-height: 1.6;
   }
 }
+
 .action-bar {
   display: flex;
+  flex-wrap: wrap;
   gap: 10px;
   align-items: center;
 }
@@ -684,5 +693,11 @@ onMounted(() => {
   align-items: center;
   gap: 8px;
   margin-bottom: 8px;
+}
+
+@media (max-width: 600px) {
+  .action-bar .el-button {
+    flex: 1;
+  }
 }
 </style>
