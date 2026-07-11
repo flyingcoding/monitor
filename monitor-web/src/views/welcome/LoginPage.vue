@@ -1,58 +1,57 @@
 <template>
-  <div style="text-align: center; margin: 0 20px">
-    <div style="margin-top: 150px">
-      <div style="font-size: 25px; font-weight: bold">登录</div>
-      <div style="font-size: 14px; color: grey">在进入系统之前请先输入用户名和密码进行登录</div>
-    </div>
-    <div style="margin-top: 50px">
-      <el-form :model="form" :rules="rules" ref="formRef">
-        <el-form-item prop="username">
-          <el-input v-model="form.username" maxlength="20" type="text" placeholder="用户名/邮箱">
-            <template #prefix>
-              <el-icon>
-                <User />
-              </el-icon>
-            </template>
-          </el-input>
+  <section class="login-page">
+    <header class="login-heading">
+      <h1>登录</h1>
+      <p>输入账户信息以进入监控控制台</p>
+    </header>
+    <el-form ref="formRef" class="login-form" :model="form" :rules="rules" @keyup.enter="userLogin">
+      <el-form-item prop="username">
+        <el-input
+          v-model="form.username"
+          maxlength="20"
+          type="text"
+          size="large"
+          autocomplete="username"
+          placeholder="用户名/邮箱"
+        >
+          <template #prefix>
+            <el-icon><User /></el-icon>
+          </template>
+        </el-input>
+      </el-form-item>
+      <el-form-item prop="password">
+        <el-input
+          v-model="form.password"
+          type="password"
+          maxlength="20"
+          size="large"
+          autocomplete="current-password"
+          placeholder="密码"
+        >
+          <template #prefix>
+            <el-icon><Lock /></el-icon>
+          </template>
+        </el-input>
+      </el-form-item>
+      <div class="login-options">
+        <el-form-item prop="remember" class="remember-item">
+          <el-checkbox v-model="form.remember" label="记住我" />
         </el-form-item>
-        <el-form-item prop="password">
-          <el-input
-            v-model="form.password"
-            type="password"
-            maxlength="20"
-            style="margin-top: 10px"
-            placeholder="密码"
-          >
-            <template #prefix>
-              <el-icon>
-                <Lock />
-              </el-icon>
-            </template>
-          </el-input>
-        </el-form-item>
-        <el-row style="margin-top: 5px">
-          <el-col :span="12" style="text-align: left">
-            <el-form-item prop="remember">
-              <el-checkbox v-model="form.remember" label="记住我" />
-            </el-form-item>
-          </el-col>
-          <el-col :span="12" style="text-align: right">
-            <el-link @click="router.push('/forget')">忘记密码？</el-link>
-          </el-col>
-        </el-row>
-      </el-form>
-    </div>
-    <div style="margin-top: 40px">
-      <el-button @click="userLogin()" style="width: 270px" type="success" plain>立即登录</el-button>
-    </div>
+        <el-link type="primary" underline="never" @click="router.push('/forget')">
+          忘记密码？
+        </el-link>
+      </div>
+    </el-form>
+    <el-button class="login-button" size="large" type="primary" @click="userLogin">
+      立即登录
+    </el-button>
     <div v-if="oidcProviders.length" class="oidc-section">
-      <el-divider><span style="color: grey; font-size: 12px">或使用以下方式登录</span></el-divider>
+      <el-divider><span class="oidc-divider-text">或使用以下方式登录</span></el-divider>
       <div class="oidc-buttons">
         <el-button
           v-for="p in oidcProviders"
           :key="p.name"
           @click="loginWithOidc(p.name)"
-          plain
           class="oidc-button"
         >
           <img v-if="p.iconUrl" :src="p.iconUrl" alt="" class="oidc-icon" />
@@ -60,7 +59,7 @@
         </el-button>
       </div>
     </div>
-  </div>
+  </section>
 </template>
 
 <script setup>
@@ -187,28 +186,109 @@ onMounted(() => {
 </script>
 
 <style scoped>
+.login-page {
+  width: 100%;
+}
+
+.login-heading h1 {
+  margin: 0;
+  color: var(--app-text);
+  font-size: 30px;
+  font-weight: 760;
+  letter-spacing: -0.03em;
+  line-height: 1.25;
+}
+
+.login-heading p {
+  margin: 10px 0 0;
+  color: var(--app-text-secondary);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.login-form {
+  margin-top: 36px;
+}
+
+.login-form :deep(.el-form-item) {
+  margin-bottom: 18px;
+}
+
+.login-form :deep(.el-input__wrapper) {
+  min-height: 50px;
+  padding-inline: 15px;
+  border: 1px solid var(--app-border);
+  box-shadow: none;
+}
+
+.login-form :deep(.el-input__wrapper:hover),
+.login-form :deep(.el-input__wrapper.is-focus) {
+  border-color: var(--app-primary);
+  box-shadow: 0 0 0 3px var(--app-primary-soft);
+}
+
+.login-options {
+  min-height: 34px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.remember-item {
+  margin-bottom: 0 !important;
+}
+
+.login-button {
+  width: 100%;
+  min-height: 50px;
+  margin-top: 28px;
+  font-size: 15px;
+  box-shadow: 0 10px 22px rgba(11, 107, 238, 0.2);
+}
+
 .oidc-section {
-  margin-top: 30px;
+  margin-top: 32px;
 }
 
 .oidc-buttons {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  align-items: center;
 }
 
 .oidc-button {
-  width: 270px;
+  width: 100%;
+  min-height: 44px;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
+  border-color: var(--app-border);
 }
 
 .oidc-icon {
   width: 18px;
   height: 18px;
   object-fit: contain;
+}
+
+.oidc-divider-text {
+  color: var(--app-text-secondary);
+  font-size: 12px;
+}
+
+@media (max-width: 480px) {
+  .login-heading h1 {
+    font-size: 27px;
+  }
+
+  .login-form {
+    margin-top: 30px;
+  }
+
+  .login-button {
+    margin-top: 22px;
+  }
 }
 </style>

@@ -1,53 +1,186 @@
+:root {
+  color-scheme: light;
+  --app-shell: #061b38;
+  --app-shell-hover: rgba(255, 255, 255, 0.08);
+  --app-shell-active: #0b6bee;
+  --app-shell-text: #cbd9eb;
+  --app-canvas: #f5f7fb;
+  --app-surface: #ffffff;
+  --app-surface-soft: #f8faff;
+  --app-text: #10233f;
+  --app-text-secondary: #64748b;
+  --app-border: #dce4ee;
+  --app-primary: #0b6bee;
+  --app-primary-soft: #eaf3ff;
+  --app-success: #16a34a;
+  --app-warning: #f97316;
+  --app-danger: #dc2626;
+  --app-muted: #94a3b8;
+  --app-shadow-sm: 0 1px 2px rgba(15, 35, 63, 0.04), 0 4px 16px rgba(15, 35, 63, 0.05);
+  --app-shadow-md: 0 12px 32px rgba(15, 35, 63, 0.12);
+  --app-radius-sm: 8px;
+  --app-radius-md: 12px;
+  --app-radius-lg: 16px;
+  --app-transition: 180ms ease-out;
+  --el-color-primary: #0b6bee;
+  --el-color-success: #16a34a;
+  --el-color-warning: #f97316;
+  --el-color-danger: #dc2626;
+  --el-border-radius-base: 8px;
+}
+
+html.dark {
+  color-scheme: dark;
+  --app-shell: #050f20;
+  --app-shell-hover: rgba(255, 255, 255, 0.1);
+  --app-shell-active: #1677ff;
+  --app-shell-text: #d8e4f3;
+  --app-canvas: #0f1726;
+  --app-surface: #162033;
+  --app-surface-soft: #19263a;
+  --app-text: #f1f5f9;
+  --app-text-secondary: #9dacbf;
+  --app-border: #2b3a50;
+  --app-primary: #5aa2ff;
+  --app-primary-soft: rgba(74, 144, 245, 0.16);
+  --app-success: #4ade80;
+  --app-warning: #fb923c;
+  --app-danger: #f87171;
+  --app-muted: #718096;
+  --app-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.18), 0 8px 22px rgba(0, 0, 0, 0.18);
+  --app-shadow-md: 0 16px 38px rgba(0, 0, 0, 0.34);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  min-width: 320px;
+  min-height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--app-canvas);
+  color: var(--app-text);
+  font-family:
+    Inter,
+    ui-sans-serif,
+    -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    'PingFang SC',
+    'Microsoft YaHei',
+    sans-serif;
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+::selection {
+  background: var(--app-primary-soft);
+  color: var(--app-text);
+}
+
+:focus-visible {
+  outline: 2px solid var(--app-primary);
+  outline-offset: 2px;
+}
+
+.el-button {
+  min-height: 36px;
+  border-radius: var(--app-radius-sm);
+  font-weight: 600;
+}
+
+.el-button.is-circle {
+  min-width: 36px;
+}
+
+.el-input__wrapper,
+.el-select__wrapper,
+.el-textarea__inner {
+  border-radius: var(--app-radius-sm);
+}
+
+.el-drawer {
+  background: var(--app-surface);
+  color: var(--app-text);
+}
+
+.el-overlay {
+  background: rgba(4, 15, 32, 0.48);
+}
+
 .is-success {
   .el-progress-bar__outer {
-    background-color: #18cb1822 !important;
+    background-color: rgba(22, 163, 74, 0.14) !important;
   }
 
   .el-progress-bar__inner {
-    background-color: #18cb18 !important;
+    background-color: var(--app-success) !important;
   }
 
   .el-progress-circle__track {
-    stroke: #18cb1822;
+    stroke: rgba(22, 163, 74, 0.14);
   }
 
   .el-progress-circle__path {
-    stroke: #18cb18 !important;
+    stroke: var(--app-success) !important;
   }
 }
 
 .is-warning {
   .el-progress-bar__outer {
-    background-color: #ffa04622;
+    background-color: rgba(249, 115, 22, 0.14);
   }
 
   .el-progress-circle__track {
-    stroke: #ffa04622;
+    stroke: rgba(249, 115, 22, 0.14);
   }
 
-  .el-progress-circle__path {
-    stroke: #ffa046 !important;
-  }
-
+  .el-progress-circle__path,
   .el-progress-bar__inner {
-    background-color: #ffa046 !important;
+    stroke: var(--app-warning) !important;
+    background-color: var(--app-warning) !important;
   }
 }
 
 .is-exception {
   .el-progress-bar__outer {
-    background-color: #ef4e4e22;
+    background-color: rgba(220, 38, 38, 0.14);
   }
 
   .el-progress-circle__track {
-    stroke: #ef4e4e22;
+    stroke: rgba(220, 38, 38, 0.14);
   }
 
-  .el-progress-circle__path {
-    stroke: #ef4e4e !important;
-  }
-
+  .el-progress-circle__path,
   .el-progress-bar__inner {
-    background-color: #ef4e4e !important;
+    stroke: var(--app-danger) !important;
+    background-color: var(--app-danger) !important;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
   }
 }

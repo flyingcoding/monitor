@@ -1,102 +1,115 @@
 <template>
-  <div>
-    <div style="margin: 30px 20px">
+  <section class="reset-page">
+    <div class="reset-progress">
       <el-steps :active="active" finish-status="success" align-center>
         <el-step title="验证电子邮件" />
         <el-step title="重新设定密码" />
       </el-steps>
     </div>
     <transition name="el-fade-in-linear" mode="out-in">
-      <div style="text-align: center; margin: 0 20px; height: 100%" v-if="active === 0">
-        <div style="margin-top: 80px">
-          <div style="font-size: 25px; font-weight: bold">重置密码</div>
-          <div style="font-size: 14px; color: grey">请输入需要重置密码的电子邮件地址</div>
-        </div>
-        <div style="margin-top: 50px">
-          <el-form :model="form" :rules="rules" @validate="onValidate" ref="formRef">
-            <el-form-item prop="email">
-              <el-input v-model="form.email" type="email" placeholder="电子邮件地址">
-                <template #prefix>
-                  <el-icon><Message /></el-icon>
-                </template>
-              </el-input>
-            </el-form-item>
-            <el-form-item prop="code">
-              <el-row :gutter="10" style="width: 100%">
-                <el-col :span="17">
-                  <el-input
-                    v-model="form.code"
-                    :maxlength="6"
-                    type="text"
-                    placeholder="请输入验证码"
-                  >
-                    <template #prefix>
-                      <el-icon><EditPen /></el-icon>
-                    </template>
-                  </el-input>
-                </el-col>
-                <el-col :span="5">
-                  <el-button
-                    type="success"
-                    @click="validateEmail"
-                    :disabled="!isEmailValid || coldTime > 0"
-                  >
-                    {{ coldTime > 0 ? '请稍后 ' + coldTime + ' 秒' : '获取验证码' }}
-                  </el-button>
-                </el-col>
-              </el-row>
-            </el-form-item>
-          </el-form>
-        </div>
-        <div style="margin-top: 70px">
-          <el-button @click="confirmReset()" style="width: 270px" type="danger" plain
-            >开始重置密码</el-button
-          >
-        </div>
+      <div v-if="active === 0" key="verify" class="reset-step">
+        <header class="reset-heading">
+          <h1>重置密码</h1>
+          <p>验证账户邮箱后即可设置新密码</p>
+        </header>
+        <el-form
+          ref="formRef"
+          class="reset-form"
+          :model="form"
+          :rules="rules"
+          @validate="onValidate"
+          @keyup.enter="confirmReset"
+        >
+          <el-form-item prop="email">
+            <el-input v-model="form.email" size="large" type="email" placeholder="电子邮件地址">
+              <template #prefix>
+                <el-icon><Message /></el-icon>
+              </template>
+            </el-input>
+          </el-form-item>
+          <el-form-item prop="code">
+            <el-row :gutter="10" style="width: 100%">
+              <el-col :span="15">
+                <el-input
+                  v-model="form.code"
+                  :maxlength="6"
+                  size="large"
+                  type="text"
+                  placeholder="请输入验证码"
+                >
+                  <template #prefix>
+                    <el-icon><EditPen /></el-icon>
+                  </template>
+                </el-input>
+              </el-col>
+              <el-col :span="9">
+                <el-button
+                  class="code-button"
+                  type="primary"
+                  plain
+                  size="large"
+                  @click="validateEmail"
+                  :disabled="!isEmailValid || coldTime > 0"
+                >
+                  {{ coldTime > 0 ? '请稍后 ' + coldTime + ' 秒' : '获取验证码' }}
+                </el-button>
+              </el-col>
+            </el-row>
+          </el-form-item>
+        </el-form>
+        <el-button class="reset-action" size="large" type="primary" @click="confirmReset">
+          开始重置密码
+        </el-button>
+        <el-button class="back-login" link type="primary" @click="router.push('/')">
+          返回登录
+        </el-button>
+      </div>
+      <div v-else key="password" class="reset-step">
+        <header class="reset-heading">
+          <h1>设置新密码</h1>
+          <p>请填写并牢记新的账户密码</p>
+        </header>
+        <el-form
+          ref="formRef"
+          class="reset-form"
+          :model="form"
+          :rules="rules"
+          @validate="onValidate"
+          @keyup.enter="doReset"
+        >
+          <el-form-item prop="password">
+            <el-input
+              v-model="form.password"
+              :maxlength="16"
+              size="large"
+              type="password"
+              placeholder="新密码"
+            >
+              <template #prefix>
+                <el-icon><Lock /></el-icon>
+              </template>
+            </el-input>
+          </el-form-item>
+          <el-form-item prop="password_repeat">
+            <el-input
+              v-model="form.password_repeat"
+              :maxlength="16"
+              size="large"
+              type="password"
+              placeholder="重复新密码"
+            >
+              <template #prefix>
+                <el-icon><Lock /></el-icon>
+              </template>
+            </el-input>
+          </el-form-item>
+        </el-form>
+        <el-button class="reset-action" size="large" type="primary" @click="doReset">
+          立即重置密码
+        </el-button>
       </div>
     </transition>
-    <transition name="el-fade-in-linear" mode="out-in">
-      <div style="text-align: center; margin: 0 20px; height: 100%" v-if="active === 1">
-        <div style="margin-top: 80px">
-          <div style="font-size: 25px; font-weight: bold">重置密码</div>
-          <div style="font-size: 14px; color: grey">请填写您的新密码，务必牢记，防止丢失</div>
-        </div>
-        <div style="margin-top: 50px">
-          <el-form :model="form" :rules="rules" @validate="onValidate" ref="formRef">
-            <el-form-item prop="password">
-              <el-input
-                v-model="form.password"
-                :maxlength="16"
-                type="password"
-                placeholder="新密码"
-              >
-                <template #prefix>
-                  <el-icon><Lock /></el-icon>
-                </template>
-              </el-input>
-            </el-form-item>
-            <el-form-item prop="password_repeat">
-              <el-input
-                v-model="form.password_repeat"
-                :maxlength="16"
-                type="password"
-                placeholder="重复新密码"
-              >
-                <template #prefix>
-                  <el-icon><Lock /></el-icon>
-                </template>
-              </el-input>
-            </el-form-item>
-          </el-form>
-        </div>
-        <div style="margin-top: 70px">
-          <el-button @click="doReset()" style="width: 270px" type="danger" plain
-            >立即重置密码</el-button
-          >
-        </div>
-      </div>
-    </transition>
-  </div>
+  </section>
 </template>
 
 <script setup>
@@ -194,4 +207,77 @@ onBeforeUnmount(() => {
 })
 </script>
 
-<style scoped></style>
+<style scoped>
+.reset-page {
+  width: 100%;
+}
+
+.reset-progress {
+  margin: 0 0 40px;
+}
+
+.reset-progress :deep(.el-step__title) {
+  font-size: 12px;
+}
+
+.reset-heading h1 {
+  margin: 0;
+  color: var(--app-text);
+  font-size: 28px;
+  font-weight: 760;
+  letter-spacing: -0.03em;
+}
+
+.reset-heading p {
+  margin: 10px 0 0;
+  color: var(--app-text-secondary);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.reset-form {
+  margin-top: 32px;
+}
+
+.reset-form :deep(.el-form-item) {
+  margin-bottom: 18px;
+}
+
+.reset-form :deep(.el-input__wrapper) {
+  min-height: 50px;
+  border: 1px solid var(--app-border);
+  box-shadow: none;
+}
+
+.reset-form :deep(.el-input__wrapper:hover),
+.reset-form :deep(.el-input__wrapper.is-focus) {
+  border-color: var(--app-primary);
+  box-shadow: 0 0 0 3px var(--app-primary-soft);
+}
+
+.code-button,
+.reset-action {
+  width: 100%;
+  min-height: 50px;
+}
+
+.reset-action {
+  margin-top: 24px;
+  box-shadow: 0 10px 22px rgba(11, 107, 238, 0.18);
+}
+
+.back-login {
+  width: 100%;
+  margin: 16px 0 0;
+}
+
+@media (max-width: 480px) {
+  .reset-progress {
+    margin-bottom: 32px;
+  }
+
+  .reset-heading h1 {
+    font-size: 26px;
+  }
+}
+</style>
