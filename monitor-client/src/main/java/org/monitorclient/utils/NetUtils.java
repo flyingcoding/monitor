@@ -1,367 +1,244 @@
 package org.monitorclient.utils;
 
 import com.alibaba.fastjson2.JSON;
-import com.alibaba.fastjson2.JSONObject;
-import lombok.extern.slf4j.Slf4j;
-import org.monitorclient.collector.GpuStat;
-import org.monitorclient.collector.ProcessSnapshot;
-import org.monitorclient.collector.SmartStat;
-import org.monitorclient.collector.SystemdUnitStat;
-import org.monitorclient.entity.BaseDetail;
-import org.monitorclient.entity.ConnectionConfig;
-import org.monitorclient.entity.Response;
-import org.monitorclient.entity.RuntimeDetail;
+import org.monitorclient.collector.*;
+import org.monitorclient.entity.*;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import java.io.*;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
+import java.util.*;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.LongSupplier;
 
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-
-@Slf4j
+/** Queues reports without I/O; one transport worker performs bounded, backoff-controlled sends. */
 public class NetUtils {
-
-    private final HttpClient client = HttpClient.newHttpClient();
+    private static final Logger log = LoggerFactory.getLogger(NetUtils.class);
+    private static final int MAX_REQUEST_BYTES = 262144;
+    private static final int MAX_RESPONSE_BYTES = 65536;
+    private static final long SNAPSHOT_TTL_NANOS = TimeUnit.MINUTES.toNanos(5);
+    private final Map<String, Snapshot> snapshots = new LinkedHashMap<>();
+    private final AtomicBoolean flushing = new AtomicBoolean();
+    private final LongSupplier clock;
     private volatile ConnectionConfig config;
+    private volatile BaseDetail pendingBaseDetail;
+    private volatile boolean heartbeat;
+    private volatile boolean closed;
+    private long nextAttempt;
+    private int consecutiveFailures;
+    private long lastReportedTimestamp = Long.MIN_VALUE;
+    private long lastWarning;
 
-    /**
-     * 设置运行期连接配置。
-     *
-     * @param config 连接配置
-     */
-    public void setConfig(ConnectionConfig config) {
-        this.config = config;
-    }
-
-    /**
-     * 使用指定地址和 token 进行客户端注册。
-     *
-     * @param address 服务端地址
-     * @param token 注册 token
-     * @return 是否注册成功
-     */
+    /** Uses a monotonic clock unaffected by NTP corrections. */
+    public NetUtils() { this(System::nanoTime); }
+    /** Allows deterministic backoff tests without sleeps. */
+    NetUtils(LongSupplier clock) { this.clock = clock; }
+    /** Recognizes an existing node before consuming a one-time registration token. */
     public boolean registerToServer(String address, String token) {
-        log.info("正在向服务端注册，请稍等...");
-        Response response = this.doGet("/register", address, token);
-        if (response.success()) {
-            log.info("客户端注册已完成");
-        } else {
-            log.error("客户端注册失败：{}", response.message());
-        }
-        return response.success();
+        ConnectionConfig candidate = new ConnectionConfig(address, token);
+        Response existing = request("GET", "/heartbeat", null, candidate);
+        if (existing.success()) return true;
+        if (existing.code() != 401 && existing.code() != 403) return false;
+        return request("GET", "/register", null, candidate).success();
     }
 
-    /**
-     * 上报基础静态信息。
-     *
-     * @param detail 基础信息
-     */
-    public void updateBaseDetails(BaseDetail detail) {
-        Response response = this.doPost("/detail", detail);
-        if (response.success()) {
-            log.info("系统基本信息更新完成");
-        } else {
-            log.error("系统基本信息更新失败：{}", response.message());
-        }
+    /** Sets pre-provisioned credentials without logging their value. */
+    public void setConfig(ConnectionConfig config) { this.config = config; }
+    /** Retains one metadata payload until the server acknowledges it. */
+    public void updateBaseDetails(BaseDetail detail) { this.pendingBaseDetail = detail; }
+    /** Requests a connectivity probe without blocking the collection thread. */
+    public void sendHeartbeat() { this.heartbeat = true; }
+    /** Enqueues one sample in a bounded queue; no retries or sleeps run on this thread. */
+    public void updateRuntimeDetails(RuntimeDetail detail) { if (!closed) LocalCacheUtils.offer(detail); }
+
+    /** Retains only the most recent systemd snapshot. */
+    public void postSystemdSnapshot(List<SystemdUnitStat> snapshot) { queueSnapshot("/systemd", envelope("units", snapshot)); }
+    /** Retains only the most recent disk health snapshot. */
+    public void postSmartSnapshot(List<SmartStat> snapshot) { queueSnapshot("/smart", envelope("disks", snapshot)); }
+    /** Retains only the most recent GPU snapshot. */
+    public void postGpuSnapshot(List<GpuStat> snapshot) { queueSnapshot("/gpu", envelope("gpus", snapshot)); }
+    /** Retains only the most recent process snapshot. */
+    public void postProcessSnapshot(ProcessSnapshot snapshot) { queueSnapshot("/process", snapshot); }
+
+    /** Preserves the original collector wire envelope. */
+    private Object envelope(String key, Object value) {
+        return value == null ? null : Collections.singletonMap(key, value);
     }
 
-    /**
-     * 发送心跳包并执行快速重试，降低瞬时网络抖动带来的误判。
-     */
-    public void sendHeartbeat() {
-        for (int i = 0; i < 3; i++) {
-            Response response = this.doGet("/heartbeat");
-            if (response.success()) {
-                log.debug("心跳发送成功");
-                return;
-            }
-            log.warn("心跳发送失败（第{}次）：{}", i + 1, response.message());
-            if (i < 2) {
-                try {
-                    Thread.sleep(1000);
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    return;
-                }
-            }
-        }
-    }
-
-    /**
-     * 通知服务端当前客户端即将下线。
-     */
-    public void notifyShutdown() {
-        log.info("正在通知服务端客户端即将下线...");
-        Response response = this.doGet("/offline");
-        if (response.success()) {
-            log.info("已通知服务端客户端下线");
-        } else {
-            log.warn("通知服务端下线失败：{}", response.message());
-        }
-    }
-
-    /**
-     * 上报 systemd unit 状态快照。
-     * <p>
-     * v1.3 systemd 模块的详情面板使用。失败仅 warn 日志，不阻塞采集主循环。
-     *
-     * @param snapshot unit 状态列表
-     */
-    public void postSystemdSnapshot(List<SystemdUnitStat> snapshot) {
-        if (snapshot == null) {
+    /** Bounds retained snapshots by four fixed keys and 256 KiB per serialized value. */
+    private void queueSnapshot(String path, Object value) {
+        if (value == null || closed) return;
+        String json = JSON.toJSONString(value);
+        if (json.getBytes(StandardCharsets.UTF_8).length > MAX_REQUEST_BYTES) {
+            warn("Oversized collector snapshot was dropped");
             return;
         }
-        try {
-            Map<String, Object> payload = new HashMap<>();
-            payload.put("units", snapshot);
-            Response response = this.doPost("/systemd", payload);
-            if (!response.success()) {
-                log.warn("systemd 详情快照上报失败：{}", response.message());
-            }
-        } catch (Exception e) {
-            log.warn("systemd 详情快照上报异常：{}", e.getMessage());
+        synchronized (snapshots) {
+            // Reinsertion gives other collectors a fair opportunity to upload.
+            snapshots.put(path, new Snapshot(json, clock.getAsLong()));
         }
     }
 
-    /**
-     * 上报 SMART 磁盘健康快照。
-     * <p>
-     * v1.3 SMART 模块的详情面板使用。失败仅 warn 日志，不阻塞采集主循环。
-     *
-     * @param snapshot 磁盘 SMART 状态列表
-     */
-    public void postSmartSnapshot(List<SmartStat> snapshot) {
-        if (snapshot == null) {
-            return;
-        }
-        try {
-            Map<String, Object> payload = new HashMap<>();
-            payload.put("disks", snapshot);
-            Response response = this.doPost("/smart", payload);
-            if (!response.success()) {
-                log.warn("SMART 详情快照上报失败：{}", response.message());
-            }
-        } catch (Exception e) {
-            log.warn("SMART 详情快照上报异常：{}", e.getMessage());
-        }
-    }
-
-    /**
-     * 上报 NVIDIA GPU 快照。
-     * <p>
-     * v1.3 GPU 模块的详情面板使用，与 RuntimeDetail 分离上报（避免污染基础时序数据，
-     * 并允许服务端独立 Caffeine 缓存 + SSE 推送）。失败仅 warn 日志，不阻塞采集主循环。
-     *
-     * @param snapshot GPU 数据列表，空列表也会上报（用于服务端清空缓存）
-     */
-    public void postGpuSnapshot(List<GpuStat> snapshot) {
-        if (snapshot == null) {
-            return;
-        }
-        try {
-            Map<String, Object> payload = new HashMap<>();
-            payload.put("gpus", snapshot);
-            Response response = this.doPost("/gpu", payload);
-            if (!response.success()) {
-                log.warn("GPU 详情快照上报失败：{}", response.message());
-            }
-        } catch (Exception e) {
-            log.warn("GPU 详情快照上报异常：{}", e.getMessage());
-        }
-    }
-
-    /**
-     * 上报进程快照（与 RuntimeDetail 分离上报，频率一致，10s 一次）。
-     * <p>
-     * v1.3 进程监控模块详情面板使用。失败仅 debug 日志，不写本地缓存：即使丢失个别周期，
-     * RuntimeDetail 中的 watchedProcessMissing 仍然能驱动告警，进程详情容忍少量丢失。
-     *
-     * @param snapshot 进程快照
-     */
-    public void postProcessSnapshot(ProcessSnapshot snapshot) {
-        if (snapshot == null) {
-            return;
-        }
-        try {
-            Response response = this.doPost("/process", snapshot);
-            if (!response.success()) {
-                log.debug("进程详情快照上报失败：{}", response.message());
-            }
-        } catch (Exception e) {
-            log.debug("进程详情快照上报异常：{}", e.getMessage());
-        }
-    }
-
-    /**
-     * 上报运行时数据；上报失败时执行指数退避重试，最终失败则写入本地缓存。
-     *
-     * @param detail 运行时监控数据
-     */
-    public void updateRuntimeDetails(RuntimeDetail detail) {
-        try {
-            RetryUtils.retryWithBackoff(() -> {
-                Response response = this.doPost("/runtime", detail);
-                if (!response.success()) {
-                    String message = response.message() == null ? "未知错误" : response.message();
-                    throw new RuntimeException(message);
-                }
-                return response;
-            }, "上报运行时数据");
-            flushCachedData();
-        } catch (Exception e) {
-            log.warn("上报运行时数据异常，缓存到本地: {}", e.getMessage());
-            LocalCacheUtils.offer(detail);
-        }
-    }
-
-    /**
-     * 按批次补报本地缓存数据，失败时回滚未发送的同批次数据，避免缓存数据丢失。
-     */
+    /** Sends at most one metric batch, one metadata payload and one snapshot per invocation. */
     public void flushCachedData() {
-        if (LocalCacheUtils.isEmpty()) {
-            return;
-        }
-        log.info("开始补报缓存数据，当前缓存数量：{}", LocalCacheUtils.size());
-        while (!LocalCacheUtils.isEmpty()) {
+        if (closed || !flushing.compareAndSet(false, true)) return;
+        try {
+            if (consecutiveFailures > 0 && clock.getAsLong() - nextAttempt < 0) return;
             List<RuntimeDetail> batch = LocalCacheUtils.drainBatch();
-            if (batch.isEmpty()) {
-                break;
+            if (!batch.isEmpty() && batch.stream().noneMatch(sample -> sample.getTimestamp() >= lastReportedTimestamp)) {
+                // Never let a backfill-only round regress the original server's current-state cache.
+                LocalCacheUtils.requeueUnsentBatch(batch, 0);
+                batch = Collections.emptyList();
             }
-            if (!this.sendRuntimeBatch(batch)) {
-                log.warn("批量补报失败，回退单条补报。");
-                int failedIndex = this.sendRuntimeOneByOne(batch);
-                if (failedIndex >= 0) {
-                    LocalCacheUtils.requeueUnsentBatch(batch, failedIndex);
-                    return;
-                }
-            }
-            if (!LocalCacheUtils.isEmpty()) {
+            if (!batch.isEmpty()) {
+                Response response;
                 try {
-                    Thread.sleep(LocalCacheUtils.getFlushBatchIntervalMs());
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
+                    // Original server applies batch side effects in wire order; newest must be last.
+                    batch.sort(Comparator.comparingLong(RuntimeDetail::getTimestamp));
+                    response = request("POST", "/runtime/batch", JSON.toJSONString(batch));
+                }
+                catch (RuntimeException error) {
+                    LocalCacheUtils.requeueUnsentBatch(batch, 0);
+                    failed(500);
                     return;
                 }
-            }
-        }
-        log.info("缓存数据补报完成");
-    }
-
-    /**
-     * 尝试通过批量接口一次性补报一个批次的数据。
-     *
-     * @param batch 待补报批次
-     * @return 批量补报是否成功
-     */
-    private boolean sendRuntimeBatch(List<RuntimeDetail> batch) {
-        try {
-            Response response = this.doPost("/runtime/batch", batch);
-            if (!response.success()) {
-                log.warn("批量补报返回失败：{}", response.message());
-                return false;
-            }
-            return true;
-        } catch (Exception e) {
-            log.warn("批量补报异常：{}", e.getMessage());
-            return false;
-        }
-    }
-
-    /**
-     * 逐条补报当前批次数据，用于批量接口不可用时的兼容回退。
-     *
-     * @param batch 待补报批次
-     * @return 失败条目的下标；全部成功则返回 -1
-     */
-    private int sendRuntimeOneByOne(List<RuntimeDetail> batch) {
-        for (int i = 0; i < batch.size(); i++) {
-            RuntimeDetail cached = batch.get(i);
-            try {
-                Response response = this.doPost("/runtime", cached);
                 if (!response.success()) {
-                    log.warn("单条补报失败：{}", response.message());
-                    return i;
+                    if (response.code() == 400 || response.code() == 413) {
+                        // A permanently invalid batch must not poison replay forever.
+                        warn("Server rejected a runtime batch; invalid samples were discarded");
+                    } else LocalCacheUtils.requeueUnsentBatch(batch, 0);
+                    failed(response.code());
+                    return;
                 }
-            } catch (Exception e) {
-                log.warn("单条补报异常：{}", e.getMessage());
-                return i;
+                lastReportedTimestamp = Math.max(lastReportedTimestamp, batch.get(batch.size() - 1).getTimestamp());
+                heartbeat = false;
+            } else if (heartbeat) {
+                Response response = request("GET", "/heartbeat", null);
+                if (!response.success()) { failed(response.code()); return; }
+                heartbeat = false;
+            }
+            if (closed || Thread.currentThread().isInterrupted()) return;
+            BaseDetail detail = pendingBaseDetail;
+            if (detail != null) {
+                Response response = request("POST", "/detail", JSON.toJSONString(detail));
+                if (!response.success()) {
+                    warn("Static metadata upload failed (status=" + response.code() + ")");
+                    if (response.code() == 400 || response.code() == 413) pendingBaseDetail = null;
+                } else if (pendingBaseDetail == detail) pendingBaseDetail = null;
+            }
+            if (closed || Thread.currentThread().isInterrupted()) return;
+            Map.Entry<String, Snapshot> snapshot = takeSnapshot();
+            if (snapshot != null) {
+                Response response = request("POST", snapshot.getKey(), snapshot.getValue().json);
+                if (!response.success()) {
+                    if (response.code() != 400 && response.code() != 413) {
+                        synchronized (snapshots) { snapshots.putIfAbsent(snapshot.getKey(), snapshot.getValue()); }
+                    }
+                    warn("Optional snapshot upload failed (status=" + response.code() + ")");
+                }
+            }
+            if (consecutiveFailures > 0) log.info("Server connection recovered; queued={}, dropped={}",
+                    LocalCacheUtils.size(), LocalCacheUtils.droppedCount());
+            consecutiveFailures = 0;
+            nextAttempt = clock.getAsLong();
+        } finally { flushing.set(false); }
+    }
+
+    /** Removes expired snapshots and selects a single retained value in round-robin order. */
+    private Map.Entry<String, Snapshot> takeSnapshot() {
+        synchronized (snapshots) {
+            Iterator<Map.Entry<String, Snapshot>> iterator = snapshots.entrySet().iterator();
+            while (iterator.hasNext()) {
+                Map.Entry<String, Snapshot> entry = iterator.next();
+                iterator.remove();
+                if (clock.getAsLong() - entry.getValue().created < SNAPSHOT_TTL_NANOS) {
+                    return new AbstractMap.SimpleImmutableEntry<>(entry);
+                }
             }
         }
-        return -1;
+        return null;
     }
 
-    /**
-     * 使用当前配置发起 GET 请求。
-     *
-     * @param url 接口路径
-     * @return 标准响应对象
-     */
-    private Response doGet(String url) {
-        ConnectionConfig current = this.config;
-        if (current == null) {
-            return Response.errorResponse(new IllegalStateException("未设置连接配置"));
+    /** Backs off without sleeping; unavailable endpoints cannot trigger busy-loop retries. */
+    private void failed(int status) {
+        consecutiveFailures = Math.min(10, consecutiveFailures + 1);
+        long seconds = status == 401 || status == 403 ? 300 : Math.min(60, 1L << consecutiveFailures);
+        nextAttempt = clock.getAsLong() + TimeUnit.SECONDS.toNanos(seconds);
+        warn("Report failed (status=" + status + "); retry delayed, queued=" + LocalCacheUtils.size()
+                + ", dropped=" + LocalCacheUtils.droppedCount());
+    }
+
+    /** Limits repeated transport/configuration warnings to one per minute. */
+    private synchronized void warn(String message) {
+        long now = clock.getAsLong();
+        if (lastWarning == 0 || now - lastWarning >= TimeUnit.MINUTES.toNanos(1)) {
+            lastWarning = now;
+            log.warn(message);
         }
-        return this.doGet(url, current.getAddress(), current.getToken());
     }
 
-    /**
-     * 发起指定地址和 token 的 GET 请求。
-     *
-     * @param url 接口路径
-     * @param address 服务端地址
-     * @param token 鉴权 token
-     * @return 标准响应对象
-     */
-    private Response doGet(String url, String address, String token) {
+    /** Stops subsequent requests; an in-flight worker is daemonized and externally supervised. */
+    public void close() { closed = true; }
+
+    /** Sends one best-effort offline notice only when no data request is in flight. */
+    public void notifyShutdown() {
+        if (!flushing.compareAndSet(false, true)) return;
+        try { request("GET", "/offline", null); }
+        finally { flushing.set(false); }
+    }
+
+    /** Uses finite read/connect timeouts, bounded bodies and no credential-bearing redirects. */
+    protected Response request(String method, String path, String json) {
+        return request(method, path, json, config);
+    }
+
+    /** Uses a candidate configuration for startup registration without replacing runtime credentials. */
+    private Response request(String method, String path, String json, ConnectionConfig current) {
+        if (current == null) return new Response(503, null, "Connection configuration is missing");
+        HttpURLConnection connection = null;
+        long deadline = clock.getAsLong() + TimeUnit.SECONDS.toNanos(15);
         try {
-            HttpRequest request = HttpRequest.newBuilder().GET()
-                    .uri(new URI(address + "/monitor" + url))
-                    .header("Authorization", token)
-                    .build();
-            HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
-            return JSONObject.parseObject(response.body()).to(Response.class);
-        } catch (Exception e) {
-            log.error("向服务端发起GET请求出现问题", e);
-            return Response.errorResponse(e);
-        }
+            connection = (HttpURLConnection) new URL(current.getAddress() + "/monitor" + path).openConnection();
+            connection.setRequestMethod(method);
+            connection.setConnectTimeout(5000);
+            connection.setReadTimeout(5000);
+            connection.setInstanceFollowRedirects(false);
+            connection.setRequestProperty("Authorization", current.getToken());
+            connection.setRequestProperty("Accept", "application/json");
+            if (json != null) {
+                byte[] body = json.getBytes(StandardCharsets.UTF_8);
+                if (body.length > MAX_REQUEST_BYTES) return new Response(413, null, "Request is too large");
+                connection.setDoOutput(true);
+                connection.setRequestProperty("Content-Type", "application/json; charset=UTF-8");
+                connection.setFixedLengthStreamingMode(body.length);
+                try (OutputStream output = connection.getOutputStream()) { output.write(body); }
+            }
+            int status = connection.getResponseCode();
+            if (status < 200 || status >= 300) return new Response(status, null, "Server rejected request");
+            try (InputStream input = connection.getInputStream(); ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+                byte[] buffer = new byte[4096];
+                int size;
+                while ((size = input.read(buffer)) != -1) {
+                    if (Thread.currentThread().isInterrupted() || clock.getAsLong() - deadline >= 0) throw new IOException("Response deadline exceeded");
+                    if (output.size() + size > MAX_RESPONSE_BYTES) throw new IOException("Response exceeds 64 KiB");
+                    output.write(buffer, 0, size);
+                }
+                return Response.parse(new String(output.toByteArray(), StandardCharsets.UTF_8));
+            }
+        } catch (Exception error) {
+            // Do not retain response bodies, URLs, tokens or arbitrary server exception messages.
+            return new Response(503, null, "Transport or response decoding failed");
+        } finally { if (connection != null) connection.disconnect(); }
     }
 
-    /**
-     * 使用当前配置发起 POST 请求。
-     *
-     * @param url 接口路径
-     * @param data 请求体
-     * @return 标准响应对象
-     */
-    private Response doPost(String url, Object data) {
-        ConnectionConfig current = this.config;
-        if (current == null) {
-            return Response.errorResponse(new IllegalStateException("未设置连接配置"));
-        }
-        try {
-            String rawData = this.serializeRequestBody(data);
-            HttpRequest request = HttpRequest.newBuilder().POST(HttpRequest.BodyPublishers.ofString(rawData))
-                    .uri(new URI(current.getAddress() + "/monitor" + url))
-                    .header("Authorization", current.getToken())
-                    .header("Content-Type", "application/json")
-                    .build();
-            HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
-            return JSONObject.parseObject(response.body()).to(Response.class);
-        } catch (Exception e) {
-            log.error("向服务端发起POST请求出现问题", e);
-            return Response.errorResponse(e);
-        }
-    }
-
-    /**
-     * 将请求体对象序列化为 JSON 字符串，兼容普通对象与集合类型。
-     *
-     * @param data 请求体对象
-     * @return JSON 字符串
-     */
-    private String serializeRequestBody(Object data) {
-        return JSON.toJSONString(data);
+    /** Holds one immutable serialized snapshot and its local monotonic creation time. */
+    private static final class Snapshot {
+        private final String json;
+        private final long created;
+        /** Captures a bounded, immutable snapshot for another thread. */
+        private Snapshot(String json, long created) { this.json = json; this.created = created; }
     }
 }

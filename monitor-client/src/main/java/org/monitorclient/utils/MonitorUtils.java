@@ -37,7 +37,8 @@ public class MonitorUtils {
     private long previousDownload;
     private long previousDiskRead;
     private long previousDiskWrite;
-    private long previousTimestamp;
+    private long previousNanos;
+    private String previousNetworkName;
 
     /**
      * 默认构造：使用 {@link OshiSystemInfoProvider}。
@@ -69,7 +70,8 @@ public class MonitorUtils {
         HardwareAbstractionLayer hardware = info.getHardware();
         double memory = hardware.getMemory().getTotal() / GB_TO_BYTES;
         double diskSize = Arrays.stream(File.listRoots()).mapToLong(File::getTotalSpace).sum() / GB_TO_BYTES;
-        String ip = Objects.requireNonNull(this.findNetworkInterface(hardware)).getIPv4addr()[0];
+        NetworkIF primary = findNetworkInterface(hardware);
+        String ip = primary == null || primary.getIPv4addr().length == 0 ? null : primary.getIPv4addr()[0];
         return new BaseDetail()
                 .setOsArch(properties.getProperty("os.arch"))
                 .setOsName(os.getFamily())
@@ -91,16 +93,18 @@ public class MonitorUtils {
         try {
             SystemInfo info = provider.systemInfo();
             HardwareAbstractionLayer hardware = info.getHardware();
-            NetworkIF networkInterface = Objects.requireNonNull(this.findNetworkInterface(hardware));
-            networkInterface.updateAttributes();
+            NetworkIF networkInterface = findNetworkInterface(hardware);
+            if (networkInterface != null) networkInterface.updateAttributes();
             CentralProcessor processor = hardware.getProcessor();
 
             long[] currentTicks = processor.getSystemCpuLoadTicks();
-            long currentUpload = networkInterface.getBytesSent();
-            long currentDownload = networkInterface.getBytesRecv();
+            long currentUpload = networkInterface == null ? 0 : networkInterface.getBytesSent();
+            long currentDownload = networkInterface == null ? 0 : networkInterface.getBytesRecv();
             long currentDiskRead = this.sumDiskReadBytes(hardware);
             long currentDiskWrite = this.sumDiskWriteBytes(hardware);
             long currentTimestamp = System.currentTimeMillis();
+            long currentNanos = System.nanoTime();
+            String networkName = networkInterface == null ? null : networkInterface.getName();
 
             if (previousTicks == null) {
                 previousTicks = currentTicks;
@@ -108,15 +112,17 @@ public class MonitorUtils {
                 previousDownload = currentDownload;
                 previousDiskRead = currentDiskRead;
                 previousDiskWrite = currentDiskWrite;
-                previousTimestamp = currentTimestamp;
+                previousNanos = currentNanos;
+                previousNetworkName = networkName;
                 return null;
             }
 
-            double elapsedSeconds = Math.max((currentTimestamp - previousTimestamp) / 1000.0, 0.001);
-            double upload = (currentUpload - previousUpload) / elapsedSeconds;
-            double download = (currentDownload - previousDownload) / elapsedSeconds;
-            double read = (currentDiskRead - previousDiskRead) / elapsedSeconds;
-            double write = (currentDiskWrite - previousDiskWrite) / elapsedSeconds;
+            double elapsedSeconds = Math.max((currentNanos - previousNanos) / 1_000_000_000.0, 0.001);
+            boolean sameNetwork = Objects.equals(networkName, previousNetworkName);
+            double upload = sameNetwork ? Math.max(0L, currentUpload - previousUpload) / elapsedSeconds : 0;
+            double download = sameNetwork ? Math.max(0L, currentDownload - previousDownload) / elapsedSeconds : 0;
+            double read = Math.max(0L, currentDiskRead - previousDiskRead) / elapsedSeconds;
+            double write = Math.max(0L, currentDiskWrite - previousDiskWrite) / elapsedSeconds;
             double cpuUsage = this.calculateCpuUsage(previousTicks, currentTicks);
 
             previousTicks = currentTicks;
@@ -124,7 +130,8 @@ public class MonitorUtils {
             previousDownload = currentDownload;
             previousDiskRead = currentDiskRead;
             previousDiskWrite = currentDiskWrite;
-            previousTimestamp = currentTimestamp;
+            previousNanos = currentNanos;
+            previousNetworkName = networkName;
 
             double memory = (hardware.getMemory().getTotal() - hardware.getMemory().getAvailable()) / GB_TO_BYTES;
             double disk = Arrays.stream(File.listRoots())
@@ -139,7 +146,7 @@ public class MonitorUtils {
                     .setDiskWrite(write / MB_TO_BYTES)
                     .setTimestamp(currentTimestamp);
         } catch (Exception e) {
-            log.error("读取运行时数据出现问题", e);
+            log.warn("Runtime collection failed: {}", e.getClass().getSimpleName());
         }
         return null;
     }
@@ -170,7 +177,7 @@ public class MonitorUtils {
                 prevTicks[CentralProcessor.TickType.IDLE.getIndex()];
         long totalCpu = cUser + nice + cSys + idle + ioWait + irq + softIrq + steal;
         if (totalCpu <= 0) return 0;
-        return (cSys + cUser) * 1.0 / totalCpu;
+        return Math.max(0.0, Math.min(1.0, (cSys + cUser) * 1.0 / totalCpu));
     }
 
     /**
@@ -210,14 +217,13 @@ public class MonitorUtils {
             for (NetworkIF network : hardware.getNetworkIFs()) {
                 String[] ipv4Addr = network.getIPv4addr();
                 NetworkInterface ni = network.queryNetworkInterface();
-                if (!ni.isLoopback() && !ni.isPointToPoint() && ni.isUp() && !ni.isVirtual()
-                        && (ni.getName().startsWith("eth") || ni.getName().startsWith("en"))
+                if (ni != null && !ni.isLoopback() && !ni.isPointToPoint() && ni.isUp()
                         && ipv4Addr.length > 0) {
                     return network;
                 }
             }
         } catch (IOException e) {
-            log.error("读取网络接口信息时出错", e);
+            log.debug("Network interface lookup failed: {}", e.getClass().getSimpleName());
         }
         return null;
     }

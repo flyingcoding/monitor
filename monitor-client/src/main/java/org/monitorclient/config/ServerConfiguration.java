@@ -23,6 +23,8 @@ public class ServerConfiguration {
     private static final String CONFIG_FILE = CONFIG_DIR + "/server.json";
 
     private final NetUtils net;
+    private final File configurationFile;
+    private final Map<String, String> environment;
 
     /**
      * 构造配置加载器。
@@ -30,7 +32,14 @@ public class ServerConfiguration {
      * @param net 网络工具
      */
     public ServerConfiguration(NetUtils net) {
+        this(net, new File(CONFIG_FILE), System.getenv());
+    }
+
+    /** Injects a configuration location and environment for isolated provisioning tests. */
+    ServerConfiguration(NetUtils net, File configurationFile, Map<String, String> environment) {
         this.net = net;
+        this.configurationFile = configurationFile;
+        this.environment = environment;
     }
 
     /**
@@ -60,8 +69,8 @@ public class ServerConfiguration {
      * @return 可用连接配置，失败返回 null
      */
     private ConnectionConfig readFromEnv() {
-        String server = System.getenv("MONITOR_SERVER");
-        String token = System.getenv("MONITOR_TOKEN");
+        String server = environment.get("MONITOR_SERVER");
+        String token = environment.get("MONITOR_TOKEN");
         if (isBlank(server) || isBlank(token)) {
             return null;
         }
@@ -92,11 +101,11 @@ public class ServerConfiguration {
      * @return 可用连接配置，失败返回 null
      */
     private ConnectionConfig readFromLocalJSONFile() {
-        File configurationFile = new File(CONFIG_FILE);
         if (!configurationFile.exists()) {
             return null;
         }
         try (FileInputStream stream = new FileInputStream(configurationFile)) {
+            if (configurationFile.length() > 65536) throw new IOException("Configuration exceeds 64 KiB");
             String raw = new String(stream.readAllBytes(), StandardCharsets.UTF_8);
             ConnectionConfig config = JSONObject.parseObject(raw, ConnectionConfig.class);
             if (config == null || isBlank(config.getAddress()) || isBlank(config.getToken())) {
@@ -105,8 +114,8 @@ public class ServerConfiguration {
             }
             log.info("从本地配置文件读取到服务端配置");
             return config;
-        } catch (IOException e) {
-            log.error("读取配置文件出错", e);
+        } catch (IOException | RuntimeException e) {
+            log.warn("Cannot read local connection configuration: {}", e.getClass().getSimpleName());
             return null;
         }
     }
@@ -117,6 +126,7 @@ public class ServerConfiguration {
      * @return 可用连接配置
      */
     private ConnectionConfig readFromScreen() {
+        if (System.console() == null) throw new IllegalStateException("No usable configuration; provision server/token before starting the agent service");
         try (Scanner scanner = new Scanner(System.in)) {
             while (true) {
                 log.info("请输入需要连接的服务端地址：(例如'http://192.168.0.100:8001')");
@@ -142,6 +152,10 @@ public class ServerConfiguration {
      */
     private ConnectionConfig registerAndPersist(String server, String token, String source) {
         ConnectionConfig config = new ConnectionConfig(server, token);
+        ConnectionConfig persisted = readFromLocalJSONFile();
+        if (persisted != null && server.equals(persisted.getAddress()) && token.equals(persisted.getToken())) {
+            return persisted;
+        }
         try {
             RetryUtils.retryWithBackoff(() -> {
                 if (!net.registerToServer(server, token)) {
@@ -163,11 +177,11 @@ public class ServerConfiguration {
      * @param config 连接配置
      */
     private void saveConfigurationToFile(ConnectionConfig config) {
-        File dir = new File(CONFIG_DIR);
+        File dir = configurationFile.getAbsoluteFile().getParentFile();
         if (!dir.exists() && dir.mkdir()) {
             log.info("服务端配置目录 {} 创建成功", CONFIG_DIR);
         }
-        File file = new File(CONFIG_FILE);
+        File file = configurationFile;
         try (FileWriter writer = new FileWriter(file, StandardCharsets.UTF_8)) {
             writer.write(JSONObject.from(config).toJSONString());
             log.info("服务端配置信息保存成功");

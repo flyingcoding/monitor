@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration scan="false">
+    <!-- Per-agent files only: avoid unbounded nohup.out or duplicate console logs. -->
+    <property name="LOG_DIR" value="${MONITOR_LOG_DIR:-logs}"/>
+    <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>${LOG_DIR}/monitor-client.log</file>
+        <append>true</append>
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <fileNamePattern>${LOG_DIR}/archive/monitor-client.%d{yyyy-MM-dd}.%i.log.gz</fileNamePattern>
+            <maxFileSize>10MB</maxFileSize>
+            <maxHistory>7</maxHistory>
+            <totalSizeCap>50MB</totalSizeCap>
+            <cleanHistoryOnStart>true</cleanHistoryOnStart>
+        </rollingPolicy>
+        <encoder>
+            <charset>UTF-8</charset>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%thread] %logger{36} - %.-2048msg%n%ex{5}</pattern>
+        </encoder>
+    </appender>
+    <appender name="ASYNC" class="ch.qos.logback.classic.AsyncAppender">
+        <queueSize>256</queueSize>
+        <discardingThreshold>0</discardingThreshold>
+        <neverBlock>true</neverBlock>
+        <includeCallerData>false</includeCallerData>
+        <maxFlushTime>2000</maxFlushTime>
+        <appender-ref ref="FILE"/>
+    </appender>
+    <logger name="oshi" level="WARN"/>
+    <logger name="com.sun.jna" level="WARN"/>
+    <root level="INFO"><appender-ref ref="ASYNC"/></root>
+</configuration>

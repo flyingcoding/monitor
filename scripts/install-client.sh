@@ -1,5 +1,6 @@
 #!/bin/bash
 set -euo pipefail
+umask 077
 
 # 运维监控客户端一键安装脚本
 # 用法示例:
@@ -232,24 +233,42 @@ obtain_jar() {
 # 在 Linux 上创建并启动 systemd 服务。
 install_systemd_service() {
     echo "注册 systemd 服务..."
+    # Keep credentials out of the unit's public Environment metadata.
+    run_privileged install -m 600 /dev/null "${INSTALL_DIR}/agent.env"
+    printf 'MONITOR_SERVER=%s\nMONITOR_TOKEN=%s\n' "$SERVER_URL" "$TOKEN" | run_privileged tee "${INSTALL_DIR}/agent.env" > /dev/null
     run_privileged tee "/etc/systemd/system/${SERVICE_NAME}.service" > /dev/null <<EOF_SERVICE
 [Unit]
 Description=Monitor Client
-After=network.target
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
 User=root
-Environment=MONITOR_SERVER=${SERVER_URL}
-Environment=MONITOR_TOKEN=${TOKEN}
-ExecStart=$(which java) -jar ${INSTALL_DIR}/${JAR_NAME}
+WorkingDirectory=${INSTALL_DIR}
+Environment=MONITOR_LOG_DIR=${INSTALL_DIR}/logs
+EnvironmentFile=${INSTALL_DIR}/agent.env
+ExecStart=$(which java) -Xms32m -Xmx64m -XX:MaxDirectMemorySize=16m -XX:MaxMetaspaceSize=64m -XX:+ExitOnOutOfMemoryError -XX:ErrorFile=${INSTALL_DIR}/logs/hs_err_pid.log -jar ${INSTALL_DIR}/${JAR_NAME}
 Restart=always
-RestartSec=10
+RestartSec=15
+TimeoutStopSec=10
+KillMode=control-group
+UMask=0077
+LimitNOFILE=256
+LimitCORE=0
+TasksMax=64
+MemoryMax=256M
+CPUQuota=10%
+Nice=10
+StandardOutput=null
+StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
 EOF_SERVICE
 
+    run_privileged chmod 600 "/etc/systemd/system/${SERVICE_NAME}.service"
     run_privileged systemctl daemon-reload
     run_privileged systemctl enable "$SERVICE_NAME"
     run_privileged systemctl restart "$SERVICE_NAME"
@@ -274,11 +293,25 @@ install_launchd_service() {
     <key>ProgramArguments</key>
     <array>
         <string>$(which java)</string>
+        <string>-Xms32m</string>
+        <string>-Xmx64m</string>
+        <string>-XX:MaxDirectMemorySize=16m</string>
+        <string>-XX:MaxMetaspaceSize=64m</string>
+        <string>-XX:+ExitOnOutOfMemoryError</string>
+        <string>-XX:ErrorFile=${INSTALL_DIR}/logs/hs_err_pid.log</string>
         <string>-jar</string>
         <string>${INSTALL_DIR}/${JAR_NAME}</string>
     </array>
+    <key>WorkingDirectory</key>
+    <string>${INSTALL_DIR}</string>
+    <key>ThrottleInterval</key>
+    <integer>15</integer>
+    <key>ExitTimeOut</key>
+    <integer>10</integer>
     <key>EnvironmentVariables</key>
     <dict>
+        <key>MONITOR_LOG_DIR</key>
+        <string>${INSTALL_DIR}/logs</string>
         <key>MONITOR_SERVER</key>
         <string>${SERVER_URL}</string>
         <key>MONITOR_TOKEN</key>
@@ -289,20 +322,21 @@ install_launchd_service() {
     <key>KeepAlive</key>
     <true/>
     <key>StandardOutPath</key>
-    <string>/tmp/monitor-client.log</string>
+    <string>/dev/null</string>
     <key>StandardErrorPath</key>
-    <string>/tmp/monitor-client.err</string>
+    <string>/dev/null</string>
 </dict>
 </plist>
 EOF_PLIST
 
+    chmod 600 "$PLIST_PATH"
     launchctl unload "$PLIST_PATH" >/dev/null 2>&1 || true
     launchctl load "$PLIST_PATH"
 
     echo "服务已启动，使用以下命令管理:"
     echo "  launchctl list | grep monitor"
     echo "  launchctl unload $PLIST_PATH"
-    echo "  tail -f /tmp/monitor-client.log"
+    echo "  tail -f ${INSTALL_DIR}/logs/monitor-client.log"
 }
 
 # 安装客户端并注册系统服务。
@@ -313,11 +347,19 @@ install_client() {
         exit 1
     fi
 
+    if [[ "$SERVER_URL$TOKEN" == *$'\n'* || "$SERVER_URL$TOKEN" == *$'\r'* || "$SERVER_URL$TOKEN" == *'"'* || "$SERVER_URL$TOKEN" == *"'"* || "$SERVER_URL$TOKEN" == *'\'* || "$SERVER_URL$TOKEN" == *'<'* || "$SERVER_URL$TOKEN" == *'>'* || "$SERVER_URL$TOKEN" == *'&'* || "$SERVER_URL$TOKEN" == *' '* || "$SERVER_URL$TOKEN" == *$'\t'* ]]; then
+        echo "错误: server/token 不能包含控制字符、空白或配置文件保留字符"
+        exit 1
+    fi
     echo "=== 运维监控客户端安装 ==="
     check_java "$os"
 
-    run_privileged mkdir -p "$INSTALL_DIR"
+    run_privileged mkdir -p "$INSTALL_DIR" "${INSTALL_DIR}/logs" "${INSTALL_DIR}/config"
     obtain_jar "${INSTALL_DIR}/${JAR_NAME}"
+    if [ "$os" = "macos" ]; then
+        # The privileged copy may create a root-owned mode-0600 JAR under our restrictive umask.
+        run_privileged chown -R "$(id -u):$(id -g)" "$INSTALL_DIR"
+    fi
 
     case "$os" in
         linux)
@@ -328,7 +370,7 @@ install_client() {
             ;;
         *)
             echo "不支持的操作系统，请手动启动:"
-            echo "  MONITOR_SERVER=$SERVER_URL MONITOR_TOKEN=$TOKEN java -jar $INSTALL_DIR/$JAR_NAME"
+            echo "  MONITOR_SERVER=<server> MONITOR_TOKEN=<token> java -jar $INSTALL_DIR/$JAR_NAME"
             ;;
     esac
 
@@ -347,6 +389,9 @@ update_client() {
     fi
 
     obtain_jar "${INSTALL_DIR}/${JAR_NAME}"
+    if [ "$os" = "macos" ]; then
+        run_privileged chown "$(id -u):$(id -g)" "${INSTALL_DIR}/${JAR_NAME}"
+    fi
 
     case "$os" in
         linux)

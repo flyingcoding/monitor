@@ -1,92 +1,97 @@
 package org.monitorclient.system;
 
-import lombok.extern.slf4j.Slf4j;
-
-import java.io.BufferedReader;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.io.InputStreamReader;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicReference;
 
-/**
- * 默认 {@link CommandExecutor}：用 {@link ProcessBuilder} 启动子进程。
- * <p>
- * 使用 Virtual Threads 并行读取 stdout / stderr 避免缓冲区满导致子进程阻塞。
- * 超时未结束时强制 {@code destroyForcibly}。
- */
-@Slf4j
+/** Polls both process pipes with bounded buffers; never allocates per-command reader threads. */
 public class ProcessCommandExecutor implements CommandExecutor {
+    private Process unfinished;
+    private static final int MAX_OUTPUT_BYTES = 262144;
+    private static final int DRAIN_BUDGET_BYTES = 16384;
 
+    /** Executes a local command with a monotonic deadline and independently capped output streams. */
     @Override
-    public CommandResult execute(List<String> command, Duration timeout) {
+    public synchronized CommandResult execute(List<String> command, Duration timeout) {
+        if (unfinished != null && unfinished.isAlive()) return failure("Previous command has not terminated", false);
+        unfinished = null;
+        if (Thread.currentThread().isInterrupted()) return failure("Command interrupted", false);
+        if (command == null || command.isEmpty() || timeout == null || timeout.isNegative() || timeout.isZero()) {
+            return failure("Invalid command or timeout", false);
+        }
         Process process = null;
-        AtomicReference<String> stdoutRef = new AtomicReference<>("");
-        AtomicReference<String> stderrRef = new AtomicReference<>("");
+        long deadline = System.nanoTime() + Math.min(timeout.toNanos(), TimeUnit.SECONDS.toNanos(30));
+        ByteArrayOutputStream stdout = new ByteArrayOutputStream();
+        ByteArrayOutputStream stderr = new ByteArrayOutputStream();
+        byte[] buffer = new byte[4096];
         try {
-            ProcessBuilder pb = new ProcessBuilder(command);
-            pb.redirectErrorStream(false);
-            process = pb.start();
-
-            Process current = process;
-            var stdoutThread = Thread.ofVirtual().start(
-                    () -> stdoutRef.set(drainStream(current.getInputStream(), "stdout")));
-            var stderrThread = Thread.ofVirtual().start(
-                    () -> stderrRef.set(drainStream(current.getErrorStream(), "stderr")));
-
-            boolean finished = process.waitFor(timeout.toMillis(), TimeUnit.MILLISECONDS);
-            if (!finished) {
-                process.destroyForcibly();
-                stdoutThread.join();
-                stderrThread.join();
-                return new CommandResult(-1, stdoutRef.get(),
-                        "command timeout: " + String.join(" ", command), true);
+            process = new ProcessBuilder(command).redirectErrorStream(false).start();
+            process.getOutputStream().close();
+            while (true) {
+                if (Thread.currentThread().isInterrupted()) throw new InterruptedException();
+                if (System.nanoTime() - deadline >= 0) return failure("Command deadline exceeded", true);
+                drainAvailable(process.getInputStream(), stdout, buffer);
+                drainAvailable(process.getErrorStream(), stderr, buffer);
+                if (!process.isAlive()) {
+                    // Finite draining also handles descendants that inherited but did not close the pipes.
+                    for (int i = 0; i < 32; i++) {
+                        int drained = drainAvailable(process.getInputStream(), stdout, buffer)
+                                + drainAvailable(process.getErrorStream(), stderr, buffer);
+                        if (drained == 0) break;
+                    }
+                    return new CommandResult(process.exitValue(), text(stdout), text(stderr), false);
+                }
+                process.waitFor(10, TimeUnit.MILLISECONDS);
             }
-            stdoutThread.join();
-            stderrThread.join();
-            return new CommandResult(process.exitValue(), stdoutRef.get(), stderrRef.get(), false);
-        } catch (IOException | InterruptedException e) {
-            if (e instanceof InterruptedException) {
-                Thread.currentThread().interrupt();
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            return failure("Command interrupted", false);
+        } catch (IOException | RuntimeException error) {
+            return failure("Command failed: " + error.getClass().getSimpleName(), false);
+        } finally {
+            if (process != null) {
+                if (process.isAlive()) {
+                    process.destroyForcibly();
+                    unfinished = process;
+                }
+                close(process.getInputStream());
+                close(process.getErrorStream());
+                try { process.getOutputStream().close(); } catch (IOException ignored) { }
             }
-            if (process != null && process.isAlive()) {
-                process.destroyForcibly();
-            }
-            return new CommandResult(-1, stdoutRef.get(),
-                    "command exec error: " + e.getMessage(), false);
         }
     }
 
+    /** Checks tool availability using the same bounded command path. */
     @Override
     public boolean isAvailable(String command) {
-        try {
-            CommandResult result = execute(List.of(command, "--version"), Duration.ofSeconds(3));
-            // 部分工具（如 smartctl）以 exit code != 0 但 stdout 非空的方式输出版本号
-            return result.success() || (result.exitCode() >= 0 && !result.stdout().isBlank());
-        } catch (Exception e) {
-            return false;
-        }
+        CommandResult result = execute(Arrays.asList(command, "--version"), Duration.ofSeconds(3));
+        return result.success() || (result.exitCode() >= 0 && !result.stdout().trim().isEmpty());
     }
 
-    /**
-     * 同步读取流到 String，避免子进程因缓冲区满而阻塞。
-     *
-     * @param is 输入流
-     * @param label 标签（仅用于日志）
-     * @return 累积的文本
-     */
-    private String drainStream(java.io.InputStream is, String label) {
-        StringBuilder sb = new StringBuilder();
-        try (BufferedReader br = new BufferedReader(new InputStreamReader(is, StandardCharsets.UTF_8))) {
-            String line;
-            while ((line = br.readLine()) != null) {
-                sb.append(line).append('\n');
-            }
-        } catch (IOException e) {
-            log.debug("子进程 {} 读取异常：{}", label, e.getMessage());
+    /** Reads only immediately available bytes, bounding both per-poll work and retained output. */
+    private int drainAvailable(InputStream input, ByteArrayOutputStream output, byte[] buffer) throws IOException {
+        int drained = 0;
+        while (drained < DRAIN_BUDGET_BYTES) {
+            int available = input.available();
+            if (available <= 0) break;
+            int size = input.read(buffer, 0, Math.min(buffer.length, Math.min(available, DRAIN_BUDGET_BYTES - drained)));
+            if (size <= 0) break;
+            if (output.size() + size > MAX_OUTPUT_BYTES) throw new IOException("Command output exceeds 256 KiB");
+            output.write(buffer, 0, size);
+            drained += size;
         }
-        return sb.toString();
+        return drained;
     }
+
+    /** Converts one capped output buffer without retaining the underlying process. */
+    private String text(ByteArrayOutputStream output) { return new String(output.toByteArray(), StandardCharsets.UTF_8); }
+    /** Produces an empty-output failure so callers cannot mistake truncation for a valid snapshot. */
+    private CommandResult failure(String message, boolean timedOut) { return new CommandResult(-1, "", message, timedOut); }
+    /** Closes a process pipe after its sole polling owner is finished. */
+    private void close(InputStream input) { try { input.close(); } catch (IOException ignored) { } }
 }

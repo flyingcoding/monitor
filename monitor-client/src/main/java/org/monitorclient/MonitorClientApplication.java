@@ -28,9 +28,6 @@ import java.util.Optional;
 import java.util.Properties;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
 
 /**
  * 客户端启动入口，负责串联配置加载、基础信息上报、调度启动与优雅停机。
@@ -38,6 +35,7 @@ import java.util.concurrent.TimeUnit;
 public class MonitorClientApplication {
 
     private static final Logger log = LoggerFactory.getLogger(MonitorClientApplication.class);
+    private static final java.util.concurrent.atomic.AtomicBoolean LOGGING_STOPPED = new java.util.concurrent.atomic.AtomicBoolean();
     private static final String COLLECTOR_CONFIG_FILE = "application.properties";
 
     /**
@@ -46,56 +44,77 @@ public class MonitorClientApplication {
      * @param args 启动参数，支持 --server / --token
      */
     public static void main(String[] args) {
+        verifyLogDirectory();
         log.info("Monitor Client 启动中...");
 
-        NetUtils net = new NetUtils();
-        MonitorUtils monitor = new MonitorUtils();
-        ServerConfiguration configuration = new ServerConfiguration(net);
-
-        ConnectionConfig connectionConfig = configuration.loadConfig(args);
-        if (connectionConfig == null) {
-            log.error("未能加载到可用的服务端连接配置，客户端退出。");
-            return;
-        }
-        net.setConfig(connectionConfig);
-
-        // v1.3 Phase 1 各模块在此注册自己的 MetricCollector（ProcessCollector / GpuCollector / SmartCollector / SystemdCollector）。
-        List<MetricCollector> collectors = new ArrayList<>();
         Properties collectorProperties = loadCollectorProperties();
-        ProcessCommandExecutor commandExecutor = new ProcessCommandExecutor();
+        int intervalSeconds = reportIntervalSeconds(collectorProperties);
+        int stallSeconds = Integer.parseInt(collectorProperties.getProperty("monitor.watchdog.timeout-seconds", "300"));
+        if (stallSeconds < 180 || stallSeconds > 3600) throw new IllegalArgumentException("Watchdog timeout must be 180..3600 seconds");
+        NetUtils net = new NetUtils();
+        ConnectionConfig connectionConfig = new ServerConfiguration(net).loadConfig(args);
+        net.setConfig(connectionConfig);
         SystemInfoProvider sharedSystemInfo = new OshiSystemInfoProvider();
-        ProcessCollector processCollector = new ProcessCollector(sharedSystemInfo, net, collectorProperties);
-        collectors.add(processCollector);
-        SystemdCollector systemdCollector = new SystemdCollector(commandExecutor, collectorProperties);
-        collectors.add(systemdCollector);
-        SmartCollector smartCollector = new SmartCollector(commandExecutor, collectorProperties);
-        collectors.add(smartCollector);
-        GpuCollector gpuCollector = new GpuCollector(commandExecutor, collectorProperties);
-        collectors.add(gpuCollector);
-
-        MonitorScheduler scheduler = new MonitorScheduler(monitor, net, collectors);
-
-        log.info("正在向服务端更新基础信息...");
-        net.updateBaseDetails(scheduler.describeWithCapabilities());
-
-        scheduler.start();
-        ScheduledExecutorService snapshotReporter = startSnapshotReporter(net, systemdCollector, smartCollector, gpuCollector);
-
+        MonitorUtils monitor = new MonitorUtils(sharedSystemInfo, System.getProperties());
+        ProcessCommandExecutor commandExecutor = new ProcessCommandExecutor();
+        List<MetricCollector> collectors = new ArrayList<>();
+        collectors.add(new ProcessCollector(sharedSystemInfo, net, collectorProperties));
+        collectors.add(new SystemdCollector(commandExecutor, collectorProperties));
+        collectors.add(new SmartCollector(commandExecutor, collectorProperties));
+        collectors.add(new GpuCollector(commandExecutor, collectorProperties));
+        MonitorScheduler scheduler = new MonitorScheduler(monitor, net, collectors, intervalSeconds);
+        org.monitorclient.runtime.AgentRuntime runtime = new org.monitorclient.runtime.AgentRuntime(scheduler, net, stallSeconds);
         CountDownLatch keepAlive = new CountDownLatch(1);
-        Runtime.getRuntime().addShutdownHook(Thread.ofVirtual().unstarted(() -> {
-            log.info("收到关闭信号，正在优雅退出...");
-            scheduler.stop();
-            stopSnapshotReporter(snapshotReporter);
-            net.notifyShutdown();
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            runtime.close();
+            stopLogging();
             keepAlive.countDown();
-        }));
-
+        }, "monitor-shutdown"));
         try {
+            runtime.start(intervalSeconds);
             keepAlive.await();
-        } catch (InterruptedException e) {
+        } catch (InterruptedException interrupted) {
             Thread.currentThread().interrupt();
-            log.warn("主线程等待被中断，客户端退出");
+        } finally {
+            runtime.close();
+            stopLogging();
         }
+    }
+
+    /** Flushes the bounded async log queue without allowing a stuck disk to pin JVM shutdown. */
+    private static void stopLogging() {
+        if (!LOGGING_STOPPED.compareAndSet(false, true)) return;
+        Thread flush = new Thread(() -> {
+            org.slf4j.ILoggerFactory factory = LoggerFactory.getILoggerFactory();
+            if (factory instanceof ch.qos.logback.classic.LoggerContext) {
+                ((ch.qos.logback.classic.LoggerContext) factory).stop();
+            }
+        }, "monitor-log-stop");
+        flush.setDaemon(true);
+        flush.start();
+        try { flush.join(2000); }
+        catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); }
+    }
+
+    /** Fails visibly if the default persistent log directory cannot be used. */
+    private static void verifyLogDirectory() {
+        String directory = System.getProperty("MONITOR_LOG_DIR", System.getenv("MONITOR_LOG_DIR"));
+        Path path = java.nio.file.Paths.get(directory == null ? "logs" : directory);
+        try {
+            Files.createDirectories(path);
+            if (!Files.isWritable(path)) throw new IOException("Log directory is not writable");
+        } catch (IOException error) {
+            throw new IllegalStateException("Cannot write monitor log directory; check MONITOR_LOG_DIR and service user permissions");
+        }
+    }
+
+    /** Loads and validates the shared runtime/snapshot interval in seconds. */
+    static int reportIntervalSeconds(Properties properties) {
+        String configured = System.getProperty("monitor.report.interval-seconds",
+                properties.getProperty("monitor.report.interval-seconds", "10"));
+        int interval = Integer.parseInt(configured.trim());
+        if (interval < 1 || interval > 60) throw new IllegalArgumentException("monitor.report.interval-seconds must be between 1 and 60");
+        return interval;
     }
 
     /**
@@ -124,6 +143,7 @@ public class MonitorClientApplication {
                 continue;
             }
             try (InputStream is = Files.newInputStream(path)) {
+                if (Files.size(path) > 65536) throw new IllegalArgumentException("Collector configuration exceeds 64 KiB");
                 props.load(is);
                 log.info("已加载 collector 配置文件：{}", path.toAbsolutePath().normalize());
                 return props;
@@ -153,7 +173,7 @@ public class MonitorClientApplication {
      */
     private static List<Path> collectorConfigCandidates() {
         Set<Path> paths = new LinkedHashSet<>();
-        addCollectorConfigCandidates(paths, Path.of("").toAbsolutePath().normalize());
+        addCollectorConfigCandidates(paths, java.nio.file.Paths.get("").toAbsolutePath().normalize());
         resolveApplicationDirectory().ifPresent(path -> addCollectorConfigCandidates(paths, path));
         return new ArrayList<>(paths);
     }
@@ -179,11 +199,11 @@ public class MonitorClientApplication {
      */
     private static Optional<Path> resolveApplicationDirectory() {
         try {
-            var codeSource = MonitorClientApplication.class.getProtectionDomain().getCodeSource();
+            java.security.CodeSource codeSource = MonitorClientApplication.class.getProtectionDomain().getCodeSource();
             if (codeSource == null || codeSource.getLocation() == null) {
                 return Optional.empty();
             }
-            Path location = Path.of(codeSource.getLocation().toURI()).toAbsolutePath().normalize();
+            Path location = java.nio.file.Paths.get(codeSource.getLocation().toURI()).toAbsolutePath().normalize();
             return Optional.of(Files.isRegularFile(location) ? location.getParent() : location);
         } catch (URISyntaxException | RuntimeException e) {
             log.debug("解析应用目录失败：{}", e.getMessage());
@@ -191,67 +211,4 @@ public class MonitorClientApplication {
         }
     }
 
-    /**
-     * 启动详情快照上报线程：每 10 秒读取各 collector 的最新快照并上报到服务端。
-     * <p>
-     * 详情快照独立于 RuntimeDetail 聚合指标上报通道，前端可单独消费。
-     *
-     * @param net 网络工具
-     * @param systemdCollector systemd 采集器
-     * @param smartCollector   SMART 采集器
-     * @param gpuCollector     GPU 采集器
-     * @return 调度器（用于 shutdown 时停止）
-     */
-    static ScheduledExecutorService startSnapshotReporter(NetUtils net,
-                                                          SystemdCollector systemdCollector,
-                                                          SmartCollector smartCollector,
-                                                          GpuCollector gpuCollector) {
-        ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor(
-                Thread.ofVirtual().name("collector-snapshot-reporter", 1).factory());
-        executor.scheduleAtFixedRate(() -> {
-            try {
-                var snapshot = systemdCollector.snapshot();
-                if (!snapshot.isEmpty()) {
-                    net.postSystemdSnapshot(snapshot);
-                }
-            } catch (Exception e) {
-                log.warn("systemd 快照上报异常：{}", e.getMessage());
-            }
-            try {
-                var smartSnapshot = smartCollector.lastSnapshot();
-                if (!smartSnapshot.isEmpty()) {
-                    net.postSmartSnapshot(smartSnapshot);
-                }
-            } catch (Exception e) {
-                log.warn("SMART 快照上报异常：{}", e.getMessage());
-            }
-            try {
-                var gpuSnapshot = gpuCollector.lastSnapshot();
-                if (!gpuSnapshot.isEmpty()) {
-                    net.postGpuSnapshot(gpuSnapshot);
-                }
-            } catch (Exception e) {
-                log.warn("GPU 快照上报异常：{}", e.getMessage());
-            }
-        }, 15, 10, TimeUnit.SECONDS);
-        return executor;
-    }
-
-    /**
-     * 停止详情快照上报线程，等待至多 5 秒。
-     *
-     * @param executor 调度器
-     */
-    static void stopSnapshotReporter(ScheduledExecutorService executor) {
-        if (executor == null) return;
-        executor.shutdown();
-        try {
-            if (!executor.awaitTermination(5, TimeUnit.SECONDS)) {
-                executor.shutdownNow();
-            }
-        } catch (InterruptedException e) {
-            executor.shutdownNow();
-            Thread.currentThread().interrupt();
-        }
-    }
 }

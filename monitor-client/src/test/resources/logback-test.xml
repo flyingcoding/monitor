@@ -1,0 +1,4 @@
+<configuration>
+    <!-- Unit tests do not create persistent logs in the checkout. -->
+    <root level="OFF"/>
+</configuration>

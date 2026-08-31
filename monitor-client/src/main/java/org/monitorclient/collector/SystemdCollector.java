@@ -78,7 +78,7 @@ public class SystemdCollector implements MetricCollector {
                 reason = "systemctl 未检测到，非 systemd 系统将自动禁用";
             }
         } catch (Exception e) {
-            reason = "systemctl 探测异常：" + e.getMessage();
+            reason = "systemctl 探测异常：" + e.getClass().getSimpleName();
         }
         this.systemctlAvailable = available;
         this.unavailableReason = reason;
@@ -117,6 +117,7 @@ public class SystemdCollector implements MetricCollector {
         List<SystemdUnitStat> snapshot = new ArrayList<>(units.size());
         int failedCount = 0;
         for (String unit : units) {
+            if (Thread.currentThread().isInterrupted()) break;
             SystemdUnitStat stat = querySingleUnit(unit);
             if (stat == null) {
                 // 单 unit 解析失败：不计入 snapshot，不影响其他 unit
@@ -149,9 +150,9 @@ public class SystemdCollector implements MetricCollector {
     private SystemdUnitStat querySingleUnit(String unit) {
         try {
             CommandExecutor.CommandResult result = executor.execute(
-                    List.of("systemctl", "show", unit,
+                    java.util.Collections.unmodifiableList(java.util.Arrays.asList("systemctl", "show", unit,
                             "--property=LoadState,ActiveState,SubState,Description",
-                            "--no-pager"),
+                            "--no-pager")),
                     SYSTEMCTL_TIMEOUT);
             // 注意：systemctl show 对不存在 unit 仍返回 exit 0 + LoadState=not-found，
             // 这里不严格要求 success（避免漏掉 LoadState=not-found 的诊断信息）
@@ -161,7 +162,7 @@ public class SystemdCollector implements MetricCollector {
             }
             return parseShowOutput(unit, result.stdout());
         } catch (Exception e) {
-            log.warn("systemctl show {} 解析失败：{}", unit, e.getMessage());
+            log.warn("systemctl show {} 解析失败：{}", unit, e.getClass().getSimpleName());
             return null;
         }
     }
@@ -185,7 +186,7 @@ public class SystemdCollector implements MetricCollector {
     SystemdUnitStat parseShowOutput(String unit, String stdout) {
         SystemdUnitStat stat = new SystemdUnitStat();
         stat.setName(unit);
-        if (stdout == null || stdout.isBlank()) {
+        if (stdout == null || stdout.trim().isEmpty()) {
             return stat;
         }
         for (String rawLine : stdout.split("\\R")) {
@@ -196,13 +197,11 @@ public class SystemdCollector implements MetricCollector {
             String key = line.substring(0, eq).trim();
             String value = line.substring(eq + 1).trim();
             switch (key) {
-                case "LoadState" -> stat.setLoadState(value);
-                case "ActiveState" -> stat.setActiveState(value);
-                case "SubState" -> stat.setSubState(value);
-                case "Description" -> stat.setDescription(value);
-                default -> {
-                    // 忽略其他字段
-                }
+                case "LoadState": stat.setLoadState(value); break;
+                case "ActiveState": stat.setActiveState(value); break;
+                case "SubState": stat.setSubState(value); break;
+                case "Description": stat.setDescription(value); break;
+                default: break;
             }
         }
         stat.setHealthy(isHealthy(stat));
@@ -233,7 +232,7 @@ public class SystemdCollector implements MetricCollector {
     private List<String> parseUnits(Properties config) {
         if (config == null) return Collections.emptyList();
         String raw = config.getProperty("monitor.collect.systemd.units", "");
-        if (raw == null || raw.isBlank()) return Collections.emptyList();
+        if (raw == null || raw.trim().isEmpty()) return Collections.emptyList();
         List<String> result = new ArrayList<>();
         for (String token : Arrays.asList(raw.split(","))) {
             String trimmed = token.trim();
@@ -243,10 +242,12 @@ public class SystemdCollector implements MetricCollector {
                 continue;
             }
             if (!result.contains(trimmed)) {
+                if (result.size() >= 16) throw new IllegalArgumentException("At most 16 collector targets are supported");
+                if (trimmed.length() > 256) throw new IllegalArgumentException("Collector target exceeds 256 characters");
                 result.add(trimmed);
             }
         }
-        return List.copyOf(result);
+        return java.util.Collections.unmodifiableList(new java.util.ArrayList<>(result));
     }
 
     /**

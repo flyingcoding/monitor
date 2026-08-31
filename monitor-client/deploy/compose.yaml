@@ -1,0 +1,35 @@
+services:
+  monitor-client:
+    build:
+      context: ..
+    restart: unless-stopped
+    stop_grace_period: 10s
+    init: true
+    user: "10001:10001"
+    environment:
+      MONITOR_LOG_DIR: /app/logs
+    env_file:
+      - agent.env
+    volumes:
+      - ./config:/app/config:ro
+      - ./logs:/app/logs
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    mem_limit: 256m
+    cpus: 0.10
+    pids_limit: 64
+    ulimits:
+      nofile:
+        soft: 256
+        hard: 256
+      core: 0
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
