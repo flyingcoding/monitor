@@ -46,7 +46,9 @@ public final class AgentRuntime implements AutoCloseable {
     /** Starts independent collection and transport without fixed-rate catch-up bursts. */
     public void start(int intervalSeconds) {
         collector.start();
-        reporter.scheduleWithFixedDelay(this::report, 0, intervalSeconds, TimeUnit.SECONDS);
+        // Four snapshot kinds must refresh before the original server's 30-second cache expiry.
+        // Empty rounds issue no HTTP requests; actual collection keeps its configured cadence.
+        reporter.scheduleWithFixedDelay(this::report, 0, 1, TimeUnit.SECONDS);
         watchdog.scheduleWithFixedDelay(this::checkHealth, 30, 30, TimeUnit.SECONDS);
     }
 
