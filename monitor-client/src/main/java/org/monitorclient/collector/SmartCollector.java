@@ -93,7 +93,7 @@ public class SmartCollector implements MetricCollector {
                     reason = "smartctl 未检测到";
                 }
             } catch (Exception e) {
-                reason = "smartctl 探测异常：" + e.getMessage();
+                reason = "smartctl 探测异常：" + e.getClass().getSimpleName();
             }
             this.smartctlAvailable = available;
             this.unavailableReason = reason;
@@ -110,7 +110,7 @@ public class SmartCollector implements MetricCollector {
      */
     private List<String> parseDevices(Properties config) {
         String raw = config == null ? null : config.getProperty("monitor.collect.smart.devices", "");
-        if (raw == null || raw.isBlank()) {
+        if (raw == null || raw.trim().isEmpty()) {
             return Collections.emptyList();
         }
         List<String> result = new ArrayList<>();
@@ -122,6 +122,8 @@ public class SmartCollector implements MetricCollector {
                 continue;
             }
             if (!result.contains(trimmed)) {
+                if (result.size() >= 16) throw new IllegalArgumentException("At most 16 collector targets are supported");
+                if (trimmed.length() > 256) throw new IllegalArgumentException("Collector target exceeds 256 characters");
                 result.add(trimmed);
             }
         }
@@ -154,6 +156,7 @@ public class SmartCollector implements MetricCollector {
         List<SmartStat> snapshot = new ArrayList<>(devices.size());
         int criticalCount = 0;
         for (String device : devices) {
+            if (Thread.currentThread().isInterrupted()) break;
             SmartStat stat = collectDevice(device);
             if (stat == null) {
                 continue;
@@ -185,16 +188,16 @@ public class SmartCollector implements MetricCollector {
     private SmartStat collectDevice(String device) {
         try {
             CommandExecutor.CommandResult result = executor.execute(
-                    List.of("smartctl", "-A", "-j", device), SMARTCTL_TIMEOUT);
+                    java.util.Collections.unmodifiableList(java.util.Arrays.asList("smartctl", "-A", "-j", device)), SMARTCTL_TIMEOUT);
             // smartctl exit code 非 0 但仍可能输出有效 JSON（如某些 ATA 错误位），优先尝试解析 stdout
             if (result.timedOut()) {
                 log.warn("smartctl 执行超时 device={}", device);
                 return null;
             }
             String stdout = result.stdout();
-            if (stdout == null || stdout.isBlank()) {
+            if (stdout == null || stdout.trim().isEmpty()) {
                 log.warn("smartctl 无输出 device={}, exitCode={}, stderr={}",
-                        device, result.exitCode(), result.stderr());
+                        device, result.exitCode(), result.stderr().substring(0, Math.min(256, result.stderr().length())));
                 return null;
             }
             JSONObject json = JSON.parseObject(stdout);
@@ -204,7 +207,7 @@ public class SmartCollector implements MetricCollector {
             }
             return parseSmartJson(device, json);
         } catch (Exception e) {
-            log.warn("解析 SMART 数据失败 device={}, reason={}", device, e.getMessage());
+            log.warn("解析 SMART 数据失败 device={}, reason={}", device, e.getClass().getSimpleName());
             return null;
         }
     }

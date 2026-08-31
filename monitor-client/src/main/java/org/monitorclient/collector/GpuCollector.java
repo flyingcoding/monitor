@@ -40,10 +40,10 @@ public class GpuCollector implements MetricCollector {
     /** nvidia-smi 主命令。 */
     private static final String NVIDIA_SMI = "nvidia-smi";
     /** GPU 查询字段，与 {@link GpuStat} 字段顺序一致。 */
-    private static final List<String> QUERY_GPU_COMMAND = List.of(
+    private static final List<String> QUERY_GPU_COMMAND = java.util.Collections.unmodifiableList(java.util.Arrays.asList(
             NVIDIA_SMI,
             "--query-gpu=index,name,utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw",
-            "--format=csv,noheader,nounits");
+            "--format=csv,noheader,nounits"));
 
     private final CommandExecutor executor;
     private final boolean enabled;
@@ -161,13 +161,13 @@ public class GpuCollector implements MetricCollector {
     private Integer probeDeviceCount() {
         try {
             CommandExecutor.CommandResult result = executor.execute(
-                    List.of(NVIDIA_SMI, "-L"), COMMAND_TIMEOUT);
+                    java.util.Collections.unmodifiableList(java.util.Arrays.asList(NVIDIA_SMI, "-L")), COMMAND_TIMEOUT);
             if (!result.success()) {
-                log.debug("nvidia-smi -L 失败 exitCode={} stderr={}", result.exitCode(), result.stderr());
+                log.debug("nvidia-smi -L 失败 exitCode={} stderr={}", result.exitCode(), result.stderr().substring(0, Math.min(256, result.stderr().length())));
                 return null;
             }
             String stdout = result.stdout();
-            if (stdout == null || stdout.isBlank()) {
+            if (stdout == null || stdout.trim().isEmpty()) {
                 return 0;
             }
             int count = 0;
@@ -178,7 +178,7 @@ public class GpuCollector implements MetricCollector {
             }
             return count;
         } catch (Exception e) {
-            log.debug("nvidia-smi -L 探测异常：{}", e.getMessage());
+            log.debug("nvidia-smi -L 探测异常：{}", e.getClass().getSimpleName());
             return null;
         }
     }
@@ -195,7 +195,7 @@ public class GpuCollector implements MetricCollector {
         try {
             result = executor.execute(QUERY_GPU_COMMAND, COMMAND_TIMEOUT);
         } catch (Exception e) {
-            log.warn("nvidia-smi 调用异常：{}", e.getMessage());
+            log.warn("nvidia-smi 调用异常：{}", e.getClass().getSimpleName());
             return Collections.emptyList();
         }
         if (result.timedOut()) {
@@ -204,11 +204,11 @@ public class GpuCollector implements MetricCollector {
         }
         if (!result.success()) {
             log.warn("nvidia-smi 调用失败 exitCode={} stderr={}", result.exitCode(),
-                    result.stderr() == null ? "" : result.stderr().trim());
+                    result.stderr() == null ? "" : result.stderr().substring(0, Math.min(256, result.stderr().length())));
             return Collections.emptyList();
         }
         String stdout = result.stdout();
-        if (stdout == null || stdout.isBlank()) {
+        if (stdout == null || stdout.trim().isEmpty()) {
             return Collections.emptyList();
         }
         List<GpuStat> stats = new ArrayList<>();
@@ -255,7 +255,7 @@ public class GpuCollector implements MetricCollector {
                     .setTemperatureCelsius(parseDouble(parts[5]))
                     .setPowerDrawWatts(parseDouble(parts[6]));
         } catch (Exception e) {
-            log.warn("nvidia-smi 行解析异常 line={}, reason={}", line, e.getMessage());
+            log.warn("nvidia-smi 行解析异常 line={}, reason={}", line, e.getClass().getSimpleName());
             return null;
         }
     }

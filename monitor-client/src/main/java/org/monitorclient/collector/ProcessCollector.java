@@ -18,6 +18,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Properties;
+import java.util.PriorityQueue;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Pattern;
 import java.util.regex.PatternSyntaxException;
@@ -108,7 +109,7 @@ public class ProcessCollector implements MetricCollector {
             lastSnapshot.set(snapshot);
             postSnapshotSafely(snapshot);
         } catch (Exception e) {
-            log.warn("ProcessCollector 执行异常：{}", e.getMessage());
+            log.warn("ProcessCollector 执行异常：{}", e.getClass().getSimpleName());
         }
     }
 
@@ -133,7 +134,7 @@ public class ProcessCollector implements MetricCollector {
         try {
             net.postProcessSnapshot(snapshot);
         } catch (Exception e) {
-            log.warn("上报进程快照失败：{}", e.getMessage());
+            log.warn("上报进程快照失败：{}", e.getClass().getSimpleName());
         }
     }
 
@@ -145,14 +146,14 @@ public class ProcessCollector implements MetricCollector {
     private List<OSProcess> listProcesses() {
         SystemInfo info = provider.systemInfo();
         if (info == null) {
-            return List.of();
+            return java.util.Collections.emptyList();
         }
         OperatingSystem os = info.getOperatingSystem();
         if (os == null) {
-            return List.of();
+            return java.util.Collections.emptyList();
         }
         List<OSProcess> raw = os.getProcesses();
-        return raw == null ? List.of() : raw;
+        return raw == null ? java.util.Collections.emptyList() : raw;
     }
 
     /**
@@ -180,12 +181,7 @@ public class ProcessCollector implements MetricCollector {
     private List<ProcessSnapshot.ProcessInfo> topN(List<OSProcess> processes,
                                                    java.util.function.ToDoubleFunction<OSProcess> scorer) {
         Comparator<OSProcess> byCpu = Comparator.comparingDouble(scorer).reversed();
-        return processes.stream()
-                .filter(Objects::nonNull)
-                .sorted(byCpu)
-                .limit(topN)
-                .map(this::toInfo)
-                .collect(Collectors.toList());
+        return selectTop(processes, byCpu);
     }
 
     /**
@@ -196,12 +192,21 @@ public class ProcessCollector implements MetricCollector {
      */
     private List<ProcessSnapshot.ProcessInfo> topNByMemory(List<OSProcess> processes) {
         Comparator<OSProcess> byMem = Comparator.comparingLong(OSProcess::getResidentSetSize).reversed();
-        return processes.stream()
-                .filter(Objects::nonNull)
-                .sorted(byMem)
-                .limit(topN)
-                .map(this::toInfo)
-                .collect(Collectors.toList());
+        return selectTop(processes, byMem);
+    }
+
+    /** Keeps O(topN) sorting state instead of sorting a second copy of all processes. */
+    private List<ProcessSnapshot.ProcessInfo> selectTop(List<OSProcess> processes, Comparator<OSProcess> bestFirst) {
+        PriorityQueue<OSProcess> heap = new PriorityQueue<>(topN, bestFirst.reversed());
+        for (OSProcess process : processes) {
+            if (process == null) continue;
+            if (heap.size() < topN) heap.offer(process);
+            else if (bestFirst.compare(process, heap.peek()) < 0) {
+                heap.poll();
+                heap.offer(process);
+            }
+        }
+        return heap.stream().sorted(bestFirst).map(this::toInfo).collect(Collectors.toList());
     }
 
     /**
@@ -218,8 +223,8 @@ public class ProcessCollector implements MetricCollector {
             boolean hit = false;
             for (OSProcess p : processes) {
                 if (p == null) continue;
-                String name = p.getName() == null ? "" : p.getName();
-                String cmd = p.getCommandLine() == null ? "" : p.getCommandLine();
+                String name = bounded(p.getName());
+                String cmd = bounded(p.getCommandLine());
                 if (pattern.matcher(name).find() || pattern.matcher(cmd).find()) {
                     hit = true;
                     break;
@@ -253,7 +258,7 @@ public class ProcessCollector implements MetricCollector {
      */
     private ProcessSnapshot.ProcessInfo toInfo(OSProcess p) {
         return new ProcessSnapshot.ProcessInfo()
-                .setName(p.getName())
+                .setName(bounded(p.getName()))
                 .setPid(p.getProcessID())
                 .setCpuPercent(cpuOf(p))
                 .setMemoryBytes(p.getResidentSetSize());
@@ -284,13 +289,15 @@ public class ProcessCollector implements MetricCollector {
      * @return 原始 pattern 字符串列表
      */
     private static List<String> parseRawPatterns(String raw) {
-        if (raw == null || raw.isBlank()) {
-            return List.of();
+        if (raw == null || raw.trim().isEmpty()) {
+            return java.util.Collections.emptyList();
         }
-        return Arrays.stream(raw.split(","))
-                .map(String::trim)
-                .filter(s -> !s.isEmpty())
-                .collect(Collectors.toList());
+        List<String> result = Arrays.stream(raw.split(","))
+                .map(String::trim).filter(s -> !s.isEmpty()).collect(Collectors.toList());
+        if (result.size() > 32 || result.stream().anyMatch(pattern -> pattern.length() > 256)) {
+            throw new IllegalArgumentException("Process patterns are limited to 32 entries of 256 characters");
+        }
+        return result;
     }
 
     /**
@@ -320,7 +327,7 @@ public class ProcessCollector implements MetricCollector {
      * @return 1..MAX_TOP_N 之间的整数
      */
     private static int parseTopN(String raw) {
-        if (raw == null || raw.isBlank()) {
+        if (raw == null || raw.trim().isEmpty()) {
             return DEFAULT_TOP_N;
         }
         try {
@@ -331,6 +338,11 @@ public class ProcessCollector implements MetricCollector {
             log.warn("非法 topN 配置 {} 回退默认 {}", raw, DEFAULT_TOP_N);
             return DEFAULT_TOP_N;
         }
+    }
+
+    /** Bounds native command-line strings before matching or snapshot serialization. */
+    private static String bounded(String value) {
+        return value == null ? "" : value.substring(0, Math.min(4096, value.length()));
     }
 
     // 仅测试用：把 patterns 字符串视图暴露出来便于断言

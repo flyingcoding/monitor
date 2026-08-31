@@ -7,6 +7,23 @@ on:
     branches: [main, main-v2]
 
 jobs:
+  client:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: 'maven'
+      - name: Verify monitor-client
+        run: mvn -f monitor-client/pom.xml --batch-mode verify
+      - name: Smoke test packaged client
+        run: python3 scripts/test-client-package.py
+      - name: Validate client installer
+        run: bash -n scripts/install-client.sh
+
   server:
     runs-on: ubuntu-latest
     # v2.0-tests：删除 GitHub Actions services 块，集成测试改走 Testcontainers

@@ -31,3 +31,10 @@ build/
 
 ### VS Code ###
 .vscode/
+
+# Runtime data and deployment credentials
+/logs/
+/config/server.json
+/deploy/config/
+/deploy/logs/
+/deploy/agent.env

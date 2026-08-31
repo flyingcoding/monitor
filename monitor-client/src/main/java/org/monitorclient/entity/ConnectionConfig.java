@@ -9,5 +9,6 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor
 public class ConnectionConfig {
     String address;
+    @lombok.ToString.Exclude
     String token;
 }
