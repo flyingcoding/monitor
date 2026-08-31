@@ -29,6 +29,7 @@ public class NetUtils {
     private volatile boolean closed;
     private long nextAttempt;
     private int consecutiveFailures;
+    private long lastReportedTimestamp = Long.MIN_VALUE;
     private long lastWarning;
 
     /** Uses a monotonic clock unaffected by NTP corrections. */
@@ -87,6 +88,11 @@ public class NetUtils {
         try {
             if (consecutiveFailures > 0 && clock.getAsLong() - nextAttempt < 0) return;
             List<RuntimeDetail> batch = LocalCacheUtils.drainBatch();
+            if (!batch.isEmpty() && batch.stream().noneMatch(sample -> sample.getTimestamp() >= lastReportedTimestamp)) {
+                // Never let a backfill-only round regress the original server's current-state cache.
+                LocalCacheUtils.requeueUnsentBatch(batch, 0);
+                batch = Collections.emptyList();
+            }
             if (!batch.isEmpty()) {
                 Response response;
                 try {
@@ -107,6 +113,7 @@ public class NetUtils {
                     failed(response.code());
                     return;
                 }
+                lastReportedTimestamp = Math.max(lastReportedTimestamp, batch.get(batch.size() - 1).getTimestamp());
                 heartbeat = false;
             } else if (heartbeat) {
                 Response response = request("GET", "/heartbeat", null);

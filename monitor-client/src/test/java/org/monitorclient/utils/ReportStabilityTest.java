@@ -64,6 +64,25 @@ class ReportStabilityTest {
         assertEquals(100, sent.get(sent.size() - 1).getTimestamp(), "original server must see the newest sample last");
     }
 
+    /** Prevents backfill-only rounds from regressing current state while collection is slow. */
+    @Test
+    void shouldWaitForFreshAnchorBeforeSendingMoreBackfill() {
+        FakeNet net = new FakeNet(new AtomicLong(1));
+        for (int i = 1; i <= 100; i++) net.updateRuntimeDetails(sample(i));
+        net.flushCachedData();
+        assertEquals(1, net.calls.size());
+        assertEquals(50, LocalCacheUtils.size());
+        net.flushCachedData();
+        assertEquals(1, net.calls.size(), "pure older backfill must wait instead of regressing server state");
+        assertEquals(50, LocalCacheUtils.size());
+        net.updateRuntimeDetails(sample(101));
+        net.flushCachedData();
+        assertEquals(2, net.calls.size());
+        java.util.List<RuntimeDetail> sent = com.alibaba.fastjson2.JSON.parseArray(net.lastBody, RuntimeDetail.class);
+        assertEquals(101, sent.get(sent.size() - 1).getTimestamp());
+        assertEquals(50, sent.size());
+    }
+
     /** Keeps only the latest snapshot per kind and sends at most one per transport round. */
     @Test
     void shouldCoalesceSnapshotsAndAvoidPoisonedMetadataBlockingMetrics() {
