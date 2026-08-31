@@ -355,10 +355,11 @@ install_client() {
     check_java "$os"
 
     run_privileged mkdir -p "$INSTALL_DIR" "${INSTALL_DIR}/logs" "${INSTALL_DIR}/config"
+    obtain_jar "${INSTALL_DIR}/${JAR_NAME}"
     if [ "$os" = "macos" ]; then
+        # The privileged copy may create a root-owned mode-0600 JAR under our restrictive umask.
         run_privileged chown -R "$(id -u):$(id -g)" "$INSTALL_DIR"
     fi
-    obtain_jar "${INSTALL_DIR}/${JAR_NAME}"
 
     case "$os" in
         linux)
@@ -388,6 +389,9 @@ update_client() {
     fi
 
     obtain_jar "${INSTALL_DIR}/${JAR_NAME}"
+    if [ "$os" = "macos" ]; then
+        run_privileged chown "$(id -u):$(id -g)" "${INSTALL_DIR}/${JAR_NAME}"
+    fi
 
     case "$os" in
         linux)
